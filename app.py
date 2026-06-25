@@ -1046,15 +1046,45 @@ with config_col:
         height=220,
     )
 
-    schema_file = st.file_uploader("JSON Schema file (.json)", type=["json"])
-    schema_text = (
-        schema_file.getvalue().decode("utf-8", errors="replace")
-        if schema_file is not None
-        else json.dumps(default_schema, indent=2, ensure_ascii=False)
+    schema_choices = {path.name: path for path in sorted(CONFIG_DIR.glob("*.json"))}
+    schema_labels = {
+        "schema.json": "Full — all dedicated marker fields (schema.json)",
+        "schema_fast.json": "Fast / free-form — metadata + all-markers catch-all (schema_fast.json)",
+        "schema_ukr.json": "Ukrainian — full (schema_ukr.json)",
+    }
+    schema_names = list(schema_choices.keys()) or ["schema.json"]
+    default_schema_index = (
+        schema_names.index("schema.json") if "schema.json" in schema_names else 0
     )
+    selected_schema_name = st.selectbox(
+        "Schema preset",
+        schema_names,
+        index=default_schema_index,
+        format_func=lambda name: schema_labels.get(name, name),
+        help="Pick a built-in schema from the config folder. Editing the text below or uploading a file overrides it.",
+    )
+    # Load the chosen preset into the editable area whenever the selection changes.
+    if st.session_state.get("_schema_preset_loaded") != selected_schema_name:
+        st.session_state["schema_text"] = json.dumps(
+            load_json(schema_choices[selected_schema_name])
+            if selected_schema_name in schema_choices
+            else default_schema,
+            indent=2,
+            ensure_ascii=False,
+        )
+        st.session_state["_schema_preset_loaded"] = selected_schema_name
+
+    schema_file = st.file_uploader(
+        "JSON Schema file (.json) — overrides the preset", type=["json"]
+    )
+    if schema_file is not None:
+        st.session_state["schema_text"] = schema_file.getvalue().decode(
+            "utf-8", errors="replace"
+        )
+
     schema_text = st.text_area(
         "JSON Schema",
-        value=schema_text,
+        key="schema_text",
         height=320,
     )
 
