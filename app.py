@@ -267,6 +267,10 @@ def run_chat_json(
     request_kwargs = {
         "model": model,
         "temperature": temperature,
+        # Bound the output so a runaway/repetition loop fails fast instead of
+        # generating until it fills the whole context window. OpenAI-compatible
+        # servers (incl. Ollama) map this to the generation limit.
+        "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
