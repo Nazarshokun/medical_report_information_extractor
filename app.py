@@ -119,8 +119,32 @@ def strip_code_fences(text: str) -> str:
     return cleaned
 
 
+def _extract_json_blob(text: str) -> str:
+    """Best-effort recovery of a JSON object/array from surrounding prose.
+
+    Reasoning/"thinking" models (and runners that ignore JSON mode) often wrap
+    the JSON in a <think> block or explanatory text. Strip those and return the
+    substring from the first opening bracket to the last closing one.
+    """
+    without_think = re.sub(
+        r"<think\b[^>]*>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL
+    )
+    start = next((i for i, ch in enumerate(without_think) if ch in "{["), None)
+    if start is None:
+        return without_think
+    end = max(without_think.rfind("}"), without_think.rfind("]"))
+    if end < start:
+        return without_think
+    return without_think[start : end + 1]
+
+
 def parse_json_response(text: str) -> dict | list:
-    return json.loads(strip_code_fences(text))
+    cleaned = strip_code_fences(text)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        # Fall back to pulling the JSON out of any thinking/prose wrapper.
+        return json.loads(_extract_json_blob(cleaned))
 
 
 def validate_schema(schema: dict) -> None:
