@@ -399,17 +399,29 @@ def ihc_marker_keywords(schema: dict) -> set[str]:
     return keywords
 
 
-def has_ihc_signal(text: str, marker_keywords: set[str]) -> bool:
-    """True if the text shows any immunohistochemistry signal.
+IHC_TERMS = ("immunohist", "imunohist", "inmunohist", "histoqu")
+_CD_MARKER_RE = re.compile(r"\bcd\d+[a-z]*\b")
 
-    Looks for an "immunohistochemistry" term (EN/PT/ES) or any known marker
-    name. Used to skip documents that contain no IHC content at all without
-    spending an LLM triage call on them.
+
+def has_ihc_signal(text: str, marker_keywords: set[str]) -> bool:
+    """True if the text shows a real immunohistochemistry signal.
+
+    Matches an immunohistochemistry term (EN/PT/ES) or at least two distinct
+    marker tokens. Marker matching is word-bounded so short marker names (EMA,
+    ICOS, CLA, SAP, ...) do not match inside ordinary Portuguese/Spanish words
+    such as "sistema", "edema" or "medicos". Any CDxx token counts as a marker
+    even if it is not in the schema (e.g. CD20), so a report is recognised by
+    its marker panel rather than a heading word.
     """
     low = text.lower()
-    if any(term in low for term in ("immunohist", "imunohist", "inmunohist")):
+    if any(term in low for term in IHC_TERMS):
         return True
-    return any(keyword in low for keyword in marker_keywords)
+    markers = set(_CD_MARKER_RE.findall(low))
+    non_cd = [keyword for keyword in marker_keywords if not keyword.startswith("cd")]
+    if non_cd:
+        pattern = re.compile(r"\b(?:" + "|".join(re.escape(k) for k in non_cd) + r")\b")
+        markers.update(pattern.findall(low))
+    return len(markers) >= 2
 
 
 @st.cache_data(show_spinner=False)
