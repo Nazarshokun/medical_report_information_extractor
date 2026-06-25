@@ -330,12 +330,18 @@ def run_chat_json(
 
 TRIAGE_SYSTEM = (
     "You are a fast document classifier. You receive the raw text of a document "
-    "and must decide what kind of document it is. Respond with EXACTLY one of "
-    "these words and nothing else:\n"
-    "- pathology : it is a pathology / immunohistochemistry report\n"
-    "- flow_citometry : it is a flow cytometry report (not pathology IHC)\n"
-    "- not_report : it is not a medical pathology report at all\n"
-    "If you are unsure, answer pathology."
+    "and must decide whether it is an IMMUNOHISTOCHEMISTRY pathology report, i.e. "
+    "a report that actually lists immunohistochemistry marker results (markers "
+    "such as CD3, CD20, CD30, CD45, Ki-67, ALK, BCL6, EMA, TdT, etc., usually "
+    "reported as positive/negative/percentage). Respond with EXACTLY one of these "
+    "words and nothing else:\n"
+    "- pathology : it IS a report that contains immunohistochemistry marker results\n"
+    "- flow_citometry : it is a flow cytometry report (marker results by flow, not IHC)\n"
+    "- not_report : anything else, INCLUDING pathology or medical reports that do "
+    "NOT contain immunohistochemistry marker results (e.g. gross descriptions, "
+    "clinical notes, molecular-only reports, cover letters)\n"
+    "Only answer pathology if you can see actual immunohistochemistry marker "
+    "results in the text. If genuinely unsure, answer pathology."
 )
 
 
