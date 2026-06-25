@@ -1,0 +1,601 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "record_id_from_source_name": {
+      "type": ["string", "null"],
+      "description": "Extract record id from the report/source filename. It will look like TCELL or TCLA or LYMREG with a number before or after that pattern or just numbers like 12-123 with a number before or after that pattern."
+    },
+    "not_report": {
+      "type": ["string", "null"],
+      "enum": ["not_report", "flow_citometry", null],
+      "description": "Set to 'not_report' if the document is not a pathology report. Set to 'flow_citometry' if the document is flow cytometry. Otherwise use null."
+    },
+
+    "ALK or CD246 or ALK protein": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "Annexin A1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "BCL2": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "BCL6": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "Beta F1 (alpha beta TCR)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "BOB1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CCND1 (Cyclin D1)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CCR4": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CCR7": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD1a": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD2": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD3 (surface and cytoplasmic/epsilon)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD4": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD5": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD7": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD8": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD10": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD11b": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD13": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD15": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD16": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD19": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD20": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD22": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD23": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD24": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD25": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD26": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD30": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD33": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD34": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD38": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD43": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD45": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD45RA / CD45RO": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "Use 1 if reported positive, 0 if reported negative, 2 if not done. This combined field should be used only if the report does not distinguish CD45RA and CD45RO separately."
+    },
+    "CD52": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD56 (NCAM)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD57": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD65": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD75": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD79a": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD79b": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD99": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD103": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD117 (KIT)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD138": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD200": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CD279 (PD1)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CLA (Cutaneous lymphocyte antigen)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CXCL13": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CXCR4": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "CXCR5": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "EBER / LMP1 / EBNA1 / EBNA2 (EBV)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "Use 1 if EBV-related marker is reported positive, 0 if negative, 2 if not done."
+    },
+    "EMA": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "FMC7": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "FOXP1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "FOXP3": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "GATA3": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "GCET1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "Granzyme B": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "Granzyme M": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "HGAL": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "HHV8 (LANA1)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "HLA-A / HLA-B / HLA-C / HLA-DR": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "Use 1 if HLA-related marker is reported positive, 0 if negative, 2 if not done."
+    },
+    "HTLV-1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "ICOS": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "Immunoglobulins (IgM, IgD, IgG, IgA, kappa light chains, lambda light chains)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "Use 1 if any listed immunoglobulin/light chain marker is reported positive, 0 if negative, 2 if not done."
+    },
+    "IRF4/MUM1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "J chain": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "LMO2": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "MAF (c-MAF)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "MATK (Megakaryocyte-associated tyrosine kinase)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "C-MYC or MYC": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "MYD88": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "OCT2": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "PAX5": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "Perforin": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "PRDM1 (BLIMP1)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "LEF1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done. important marker"
+    },
+    "PU1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "SAP": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "SOX11": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "TBX21 (T-BET)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "TCL1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "TCR gamma / TCR delta": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "TdT (Terminal deoxynucleotidyl transferase)": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "TIA1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "XBP1": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+    "ZAP70": {
+      "type": ["integer", "null"],
+      "enum": [0, 1, 2, null],
+      "description": "1 is positive, 0 is negative, 2 is not done."
+    },
+
+    "record_id": {
+      "type": ["string", "null"],
+      "description": "Unique REDCap record identifier."
+    },
+    "patient_id": {
+      "type": ["string", "null"],
+      "description": "Patient identifier found in report."
+    },
+    "patient_name": {
+      "type": ["string", "null"],
+      "description": "Full patient name exactly as written in report."
+    },
+    "report_date": {
+      "type": ["string", "null"],
+      "description": "Date of pathology report. Prefer YYYY-MM-DD when possible."
+    },
+    "specimen_site": {
+      "type": ["string", "null"],
+      "description": "Anatomic site of specimen."
+    },
+    "diagnosis": {
+      "type": ["string", "null"],
+      "description": "Primary pathology diagnosis."
+    },
+    "ki67_percent": {
+      "type": ["number", "null"],
+      "description": "Ki-67 proliferation index as a numeric percent if present."
+    },
+    "text_from_report": {
+      "type": ["string", "null"],
+      "description": "Extract all microscopy and immunohistochemistry text from the report. If it is in Spanish or Portuguese, translate it to English."
+    },
+    "Grade_follicular_lymphoma": {
+      "type": ["integer", "null"],
+      "enum": [1, 2, 3, 4, null],
+      "description": "1 is Grade 1/I, 2 is Grade 2/II, 3 is Grade 3A/IIIA, 4 is Gread 3B/IIIB, only for follicular lymphoma"
+    }
+  },
+  "required": [
+    "record_id_from_source_name",
+    "not_report",
+    "ALK or CD246 or ALK protein",
+    "Annexin A1",
+    "BCL2",
+    "BCL6",
+    "Beta F1 (alpha beta TCR)",
+    "BOB1",
+    "CCND1 (Cyclin D1)",
+    "CCR4",
+    "CCR7",
+    "CD1a",
+    "CD2",
+    "CD3 (surface and cytoplasmic/epsilon)",
+    "CD4",
+    "CD5",
+    "CD7",
+    "CD8",
+    "CD10",
+    "CD11b",
+    "CD13",
+    "CD15",
+    "CD16",
+    "CD19",
+    "CD20",
+    "CD22",
+    "CD23",
+    "CD24",
+    "CD25",
+    "CD26",
+    "CD30",
+    "CD33",
+    "CD34",
+    "CD38",
+    "CD43",
+    "CD45",
+    "CD45RA / CD45RO",
+    "CD52",
+    "CD56 (NCAM)",
+    "CD57",
+    "CD65",
+    "CD75",
+    "CD79a",
+    "CD79b",
+    "CD99",
+    "CD103",
+    "CD117 (KIT)",
+    "CD138",
+    "CD200",
+    "CD279 (PD1)",
+    "CLA (Cutaneous lymphocyte antigen)",
+    "CXCL13",
+    "CXCR4",
+    "CXCR5",
+    "EBER / LMP1 / EBNA1 / EBNA2 (EBV)",
+    "EMA",
+    "FMC7",
+    "FOXP1",
+    "FOXP3",
+    "GATA3",
+    "GCET1",
+    "Granzyme B",
+    "Granzyme M",
+    "HGAL",
+    "HHV8 (LANA1)",
+    "HLA-A / HLA-B / HLA-C / HLA-DR",
+    "HTLV-1",
+    "ICOS",
+    "Immunoglobulins (IgM, IgD, IgG, IgA, kappa light chains, lambda light chains)",
+    "IRF4/MUM1",
+    "J chain",
+    "LMO2",
+    "MAF (c-MAF)",
+    "MATK (Megakaryocyte-associated tyrosine kinase)",
+    "C-MYC or MYC",
+    "MYD88",
+    "OCT2",
+    "PAX5",
+    "Perforin",
+    "PRDM1 (BLIMP1)",
+    "PU1",
+    "SAP",
+    "SOX11",
+    "TBX21 (T-BET)",
+    "TCL1",
+    "TCR gamma / TCR delta",
+    "TdT (Terminal deoxynucleotidyl transferase)",
+    "TIA1",
+    "LEF1",
+    "XBP1",
+    "ZAP70",
+    "record_id",
+    "patient_id",
+    "patient_name",
+    "report_date",
+    "specimen_site",
+    "diagnosis",
+    "ki67_percent",
+    "text_from_report"
+  ]
+}

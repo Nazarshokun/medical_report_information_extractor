@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+*.env
+
+# Claude Code local settings (machine-specific)
+.claude/
+
+# Secrets / local config
+*.key
+secrets.*
+
+# Data / uploads (avoid committing any medical reports or PHI)
+*.pdf
+*.csv
+*.xlsx
+*.docx
+uploads/
+data/
