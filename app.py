@@ -1216,6 +1216,11 @@ if run_extraction:
                 )
                 progress.progress(index / max(len(expanded_reports), 1))
                 continue
+            # Passed screening: switch the status back to the extraction message
+            # (it was overwritten by the "Screening ..." line above).
+            status.write(
+                f"Extracting {prepared_report.report_name} ({index}/{len(expanded_reports)})"
+            )
 
         single_result = extract_reports(
             backend=backend,
