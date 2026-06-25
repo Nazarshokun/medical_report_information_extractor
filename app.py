@@ -146,8 +146,44 @@ def scalar_to_csv_cell(value) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+EXTRA_MARKER_PREFIX = "extra__"
+
+
+def collect_additional_marker_names(results: list[ExtractionResult]) -> list[str]:
+    """Union of marker names found in `additional_markers` across all results.
+
+    Returned sorted so the dynamic columns are stable for a given batch.
+    """
+    names: set[str] = set()
+    for result in results:
+        if not result.success or not isinstance(result.parsed_json, dict):
+            continue
+        extras = result.parsed_json.get("additional_markers")
+        if not isinstance(extras, list):
+            continue
+        for entry in extras:
+            if isinstance(entry, dict):
+                name = entry.get("marker")
+                if isinstance(name, str) and name.strip():
+                    names.add(name.strip())
+    return sorted(names)
+
+
 def build_results_csv(results: list[ExtractionResult], schema: dict) -> bytes:
-    fieldnames = ["source_file_name", *list(schema.get("properties", {}).keys())]
+    # The `additional_markers` array is expanded into one `extra__<marker>`
+    # column per unique marker found in the batch, instead of being dumped as a
+    # single JSON cell. Every other schema field maps to its own column as before.
+    base_fields = [
+        field
+        for field in schema.get("properties", {}).keys()
+        if field != "additional_markers"
+    ]
+    extra_names = collect_additional_marker_names(results)
+    fieldnames = [
+        "source_file_name",
+        *base_fields,
+        *[EXTRA_MARKER_PREFIX + name for name in extra_names],
+    ]
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
@@ -159,9 +195,19 @@ def build_results_csv(results: list[ExtractionResult], schema: dict) -> bytes:
         row.update(
             {
                 field: scalar_to_csv_cell(result.parsed_json.get(field))
-                for field in schema.get("properties", {}).keys()
+                for field in base_fields
             }
         )
+        extras = result.parsed_json.get("additional_markers")
+        if isinstance(extras, list):
+            for entry in extras:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("marker")
+                if isinstance(name, str) and name.strip():
+                    row[EXTRA_MARKER_PREFIX + name.strip()] = scalar_to_csv_cell(
+                        entry.get("value")
+                    )
         writer.writerow(row)
 
     return buffer.getvalue().encode("utf-8")
