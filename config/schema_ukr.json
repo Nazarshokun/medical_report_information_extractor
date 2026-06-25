@@ -495,6 +495,30 @@
       "type": ["integer", "null"],
       "enum": [1, 2, 3, 4, null],
       "description": "1 is Grade 1/I, 2 is Grade 2/II, 3 is Grade 3A/IIIA, 4 is Gread 3B/IIIB, only for follicular lymphoma"
+    },
+    "additional_markers": {
+      "type": ["array", "null"],
+      "description": "Catch-all for ANY immunohistochemistry or flow-cytometry marker reported that does NOT already have its own dedicated field above. Add one entry per such marker. Do NOT include markers that already have a dedicated field. Use null or an empty array if there are none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Marker name exactly as written in the report (e.g. CD20, PAX5, MUM1, BCL2)."
+          },
+          "value": {
+            "type": ["integer", "null"],
+            "enum": [0, 1, 2, null],
+            "description": "Same coding as the dedicated markers: 1 is positive, 0 is negative, 2 is not done."
+          },
+          "raw_text": {
+            "type": ["string", "null"],
+            "description": "The original result text for this marker as written in the report, if any (e.g. 'positive in 30% of cells')."
+          }
+        },
+        "required": ["marker", "value", "raw_text"],
+        "additionalProperties": false
+      }
     }
   },
   "required": [
@@ -596,6 +620,7 @@
     "specimen_site",
     "diagnosis",
     "ki67_percent",
-    "text_from_report"
+    "text_from_report",
+    "additional_markers"
   ]
 }
