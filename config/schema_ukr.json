@@ -489,7 +489,7 @@
     },
     "text_from_report": {
       "type": ["string", "null"],
-      "description": "Extract all microscopy and immunohistochemistry text from the report. If it is in Spanish or Portuguese, translate it to English."
+      "description": "Extract all microscopy and immunohistochemistry text from the report and output it in English. The report may be in any language; translate it into English."
     },
     "Grade_follicular_lymphoma": {
       "type": ["integer", "null"],

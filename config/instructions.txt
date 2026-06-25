@@ -15,6 +15,7 @@ Rules:
 - If the document is flow cytometry rather than pathology, set `not_report` to `flow_citometry`.
 - For immunohistochemistry markers with 0/1/2 coding, use only those values or null.
 - Treat `CD45RA`, `CD45RO`, and `CD45` as three separate markers. Do not merge them into one field.
-- Code the markers exactly as follows in English, Spanish, and Portuguese: 1 is positive (positive/positivo/positivo), 0 is negative (negative/negativo/negativo), 2 is not done (not done/no realizado/nao realizado), in case of null make it 2 - not done.
+- Code the markers regardless of the report's language: 1 is positive (e.g. positive/positivo/positivo), 0 is negative (e.g. negative/negativo/negativo), 2 is not done (e.g. not done/no realizado/nao realizado); interpret the equivalent terms in whatever language the report uses, and in case of null make it 2 - not done.
 - If the report mentions any immunohistochemistry or flow-cytometry marker that does NOT have its own dedicated field in the schema, add it to `additional_markers` (one entry per marker) with the marker name, the same 0/1/2 coding, and the original result text in `raw_text`. Do not duplicate markers that already have a dedicated field. Use null or an empty array if there are no such extra markers.
-- For `text_from_report`, extract microscopy and immunohistochemistry text and translate Spanish or Portuguese into English.
+- For `text_from_report`, extract the microscopy and immunohistochemistry text and translate it into English. The source report may be written in ANY language; always output this field in English.
+- Always produce free-text field values (for example `diagnosis`, `specimen_site`, `text_from_report`) in English. If the report is written in any language other than English, translate the relevant content into English. Keep identifiers, names, dates, and marker codes unchanged.
