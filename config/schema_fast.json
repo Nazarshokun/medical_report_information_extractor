@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "record_id_from_source_name": {
+      "type": ["string", "null"],
+      "description": "Record identifier derived from the report/source filename."
+    },
+    "record_id": {
+      "type": ["string", "null"],
+      "description": "Unique REDCap record identifier found in the report, if any."
+    },
+    "report_date": {
+      "type": ["string", "null"],
+      "description": "Date the test/report was performed. Prefer YYYY-MM-DD when possible."
+    },
+    "not_report": {
+      "type": ["string", "null"],
+      "enum": ["not_report", "flow_citometry", null],
+      "description": "Set to not_report if this is not a pathology report, flow_citometry if it is a flow cytometry report, otherwise null."
+    },
+    "text_from_report": {
+      "type": ["string", "null"],
+      "description": "All microscopy and immunohistochemistry text from the report, output in English. The report may be in any language; translate it into English."
+    },
+    "additional_markers": {
+      "type": ["array", "null"],
+      "description": "List EVERY immunohistochemistry or flow-cytometry marker reported in the document. One entry per marker. Use null or an empty array if no markers are reported.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Marker name exactly as written in the report (e.g. CD20, CD3, CD30, Ki-67, ALK, BCL6, MUM1, EMA)."
+          },
+          "value": {
+            "type": ["integer", "null"],
+            "enum": [0, 1, 2, null],
+            "description": "1 is positive, 0 is negative, 2 is not done. Interpret the equivalent terms in whatever language the report uses."
+          },
+          "raw_text": {
+            "type": ["string", "null"],
+            "description": "The original result text for this marker as written in the report, if any (e.g. 'positive in 30% of cells')."
+          }
+        },
+        "required": ["marker", "value", "raw_text"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "record_id_from_source_name",
+    "record_id",
+    "report_date",
+    "not_report",
+    "text_from_report",
+    "additional_markers"
+  ]
+}

@@ -425,6 +425,15 @@ def ihc_marker_keywords(schema: dict) -> set[str]:
 
 IHC_TERMS = ("immunohist", "imunohist", "inmunohist", "histoqu")
 _CD_MARKER_RE = re.compile(r"\bcd\d+[a-z]*\b")
+# Common non-CD immunohistochemistry markers, used as a baseline so the
+# pre-screen still works when the schema has no dedicated marker fields
+# (e.g. the free-form schema_fast.json).
+BASE_IHC_MARKERS = frozenset({
+    "alk", "bcl2", "bcl6", "beta f1", "ccr4", "ccr7", "cla", "cyclin d1",
+    "eber", "ema", "foxp3", "gata3", "granzyme b", "granzyme m", "hla-dr",
+    "icos", "ki-67", "ki67", "mib-1", "mum1", "oct2", "pax5", "perforin",
+    "sox11", "sap", "tbx21", "tcl1", "tdt", "tia1", "lmp1", "myc",
+})
 
 
 def has_ihc_signal(text: str, marker_keywords: set[str]) -> bool:
@@ -441,7 +450,9 @@ def has_ihc_signal(text: str, marker_keywords: set[str]) -> bool:
     if any(term in low for term in IHC_TERMS):
         return True
     markers = set(_CD_MARKER_RE.findall(low))
-    non_cd = [keyword for keyword in marker_keywords if not keyword.startswith("cd")]
+    non_cd = BASE_IHC_MARKERS | {
+        keyword for keyword in marker_keywords if not keyword.startswith("cd")
+    }
     if non_cd:
         pattern = re.compile(r"\b(?:" + "|".join(re.escape(k) for k in non_cd) + r")\b")
         markers.update(pattern.findall(low))
