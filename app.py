@@ -380,6 +380,38 @@ def triage_document(
     return "pathology"
 
 
+def ihc_marker_keywords(schema: dict) -> set[str]:
+    """Lower-cased marker name stems taken from the schema's coded marker fields.
+
+    Used as a cheap keyword backstop: any integer/enum field is treated as an
+    immunohistochemistry marker, and its core token (before a parenthesis or
+    slash) becomes a search keyword, e.g. "CD56 (NCAM)" -> "cd56".
+    """
+    keywords: set[str] = set()
+    for name, spec in schema.get("properties", {}).items():
+        types = spec.get("type")
+        is_marker = isinstance(types, list) and "integer" in types and "enum" in spec
+        if not is_marker:
+            continue
+        core = re.split(r"[(/]", name)[0].strip().lower()
+        if core:
+            keywords.add(core)
+    return keywords
+
+
+def has_ihc_signal(text: str, marker_keywords: set[str]) -> bool:
+    """True if the text shows any immunohistochemistry signal.
+
+    Looks for an "immunohistochemistry" term (EN/PT/ES) or any known marker
+    name. Used to skip documents that contain no IHC content at all without
+    spending an LLM triage call on them.
+    """
+    low = text.lower()
+    if any(term in low for term in ("immunohist", "imunohist", "inmunohist")):
+        return True
+    return any(keyword in low for keyword in marker_keywords)
+
+
 @st.cache_data(show_spinner=False)
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> tuple[str, int]:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -1117,6 +1149,7 @@ if run_extraction:
             expanded_reports.append(prepared_report)
         progress.progress(index / max(len(prepared_reports), 1))
 
+    marker_keywords = ihc_marker_keywords(schema_obj)
     results: list[ExtractionResult] = []
     for index, prepared_report in enumerate(expanded_reports, start=1):
         status.write(f"Extracting {prepared_report.report_name} ({index}/{len(expanded_reports)})")
@@ -1146,18 +1179,24 @@ if run_extraction:
             status.write(
                 f"Screening {prepared_report.report_name} ({index}/{len(expanded_reports)})"
             )
-            try:
-                triage_label = triage_document(
-                    backend=backend,
-                    client=llm_client,
-                    model=model,
-                    report_text=prepared_report.report_text,
-                    temperature=float(temperature),
-                )
-            except Exception:
-                # If the screen fails, fall through to a full extraction rather
-                # than risk dropping a real report.
-                triage_label = "pathology"
+            if not has_ihc_signal(prepared_report.report_text, marker_keywords):
+                # Keyword backstop: no immunohistochemistry marker or term appears
+                # anywhere in the text, so skip immediately without spending an
+                # LLM triage call.
+                triage_label = "not_report"
+            else:
+                try:
+                    triage_label = triage_document(
+                        backend=backend,
+                        client=llm_client,
+                        model=model,
+                        report_text=prepared_report.report_text,
+                        temperature=float(temperature),
+                    )
+                except Exception:
+                    # If the screen fails, fall through to a full extraction rather
+                    # than risk dropping a real report.
+                    triage_label = "pathology"
             if triage_label != "pathology":
                 results.append(
                     ExtractionResult(
