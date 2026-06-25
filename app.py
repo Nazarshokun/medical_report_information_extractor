@@ -328,6 +328,52 @@ def run_chat_json(
     return completion.choices[0].message.content or ""
 
 
+TRIAGE_SYSTEM = (
+    "You are a fast document classifier. You receive the raw text of a document "
+    "and must decide what kind of document it is. Respond with EXACTLY one of "
+    "these words and nothing else:\n"
+    "- pathology : it is a pathology / immunohistochemistry report\n"
+    "- flow_citometry : it is a flow cytometry report (not pathology IHC)\n"
+    "- not_report : it is not a medical pathology report at all\n"
+    "If you are unsure, answer pathology."
+)
+
+
+def triage_document(
+    *,
+    backend: str,
+    client,
+    model: str,
+    report_text: str,
+    temperature: float,
+) -> str:
+    """Cheap pre-screen: classify a document before the expensive extraction.
+
+    Returns one of "pathology", "flow_citometry", "not_report". Only a tiny
+    output is requested, and only the first ~6000 characters are sent, so this
+    is far cheaper than a full schema extraction. The caller skips the heavy
+    extraction whenever the result is not "pathology".
+    """
+    user = "Document text:\n\n" + report_text[:6000] + "\n\nClassification:"
+    raw = run_chat_json(
+        backend=backend,
+        client=client,
+        model=model,
+        system=TRIAGE_SYSTEM,
+        user=user,
+        use_json_mode=False,
+        temperature=temperature,
+        max_tokens=8,
+    )
+    label = raw.strip().lower()
+    if "flow" in label or "citometr" in label or "cytometr" in label:
+        return "flow_citometry"
+    if label.startswith("not") or "not_report" in label or "not a" in label:
+        return "not_report"
+    # Default to processing the document so a real report is never silently dropped.
+    return "pathology"
+
+
 @st.cache_data(show_spinner=False)
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> tuple[str, int]:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -862,6 +908,17 @@ with st.sidebar:
         value=True,
         help="If one uploaded file contains several pathology reports, try to split it into separate extractions.",
     )
+    prescreen_skip = st.checkbox(
+        "Pre-screen and skip non-pathology documents",
+        value=True,
+        help=(
+            "Run a fast one-word classification on each document first. Documents "
+            "that are not pathology/immunohistochemistry reports are marked "
+            "not_report (or flow_citometry) and the slow full extraction is "
+            "skipped, saving time. If the screen is unsure it still runs the full "
+            "extraction, so real reports are never dropped."
+        ),
+    )
     st.header("PDF Input")
     pdf_input_mode = st.selectbox(
         "PDF text preparation",
@@ -1078,6 +1135,42 @@ if run_extraction:
             )
             progress.progress(index / max(len(expanded_reports), 1))
             continue
+
+        if prescreen_skip:
+            status.write(
+                f"Screening {prepared_report.report_name} ({index}/{len(expanded_reports)})"
+            )
+            try:
+                triage_label = triage_document(
+                    backend=backend,
+                    client=llm_client,
+                    model=model,
+                    report_text=prepared_report.report_text,
+                    temperature=float(temperature),
+                )
+            except Exception:
+                # If the screen fails, fall through to a full extraction rather
+                # than risk dropping a real report.
+                triage_label = "pathology"
+            if triage_label != "pathology":
+                results.append(
+                    ExtractionResult(
+                        report_name=prepared_report.report_name,
+                        source_file_name=prepared_report.source_file_name,
+                        success=True,
+                        status_label=triage_label,
+                        raw_response="(pre-screened; full extraction skipped)",
+                        parsed_json={"not_report": triage_label},
+                        validation_errors=[],
+                        source_kind=prepared_report.source_kind,
+                        text_extraction_method=prepared_report.text_extraction_method,
+                        preparation_warnings=prepared_report.preparation_warnings,
+                        prepared_text=prepared_report.report_text,
+                        error_message=None,
+                    )
+                )
+                progress.progress(index / max(len(expanded_reports), 1))
+                continue
 
         single_result = extract_reports(
             backend=backend,
