@@ -1,0 +1,37 @@
+# Native Streamlit theme (no custom CSS, no web fonts) — a clean clinical palette.
+# Built-in fonts are used on purpose: nothing is fetched off-device, which suits
+# this app's local / PHI-sensitive use. Both light and dark are defined, so the
+# theme toggle in the app's "⋮ → Settings" menu works.
+
+[theme]
+font = "sans-serif"
+baseRadius = "8px"
+showWidgetBorder = true
+showSidebarBorder = true
+linkUnderline = false
+
+[theme.light]
+primaryColor = "#0b6bcb"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f7fb"
+textColor = "#1b2733"
+linkColor = "#0b6bcb"
+borderColor = "#d7e0ea"
+greenColor = "#1a7f47"
+orangeColor = "#b7791f"
+redColor = "#c8322b"
+dataframeHeaderBackgroundColor = "#f4f7fb"
+dataframeBorderColor = "#d7e0ea"
+
+[theme.dark]
+primaryColor = "#4c9be8"
+backgroundColor = "#0e1520"
+secondaryBackgroundColor = "#172232"
+textColor = "#e6eef7"
+linkColor = "#7cc0ff"
+borderColor = "#2a394d"
+greenColor = "#3fb950"
+orangeColor = "#d29922"
+redColor = "#f0655d"
+dataframeHeaderBackgroundColor = "#172232"
+dataframeBorderColor = "#2a394d"

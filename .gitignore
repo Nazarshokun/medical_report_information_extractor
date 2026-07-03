@@ -9,8 +9,9 @@ __pycache__/
 build/
 dist/
 
-# Virtual environments
+# Virtual environments (incl. custom-named ones: .venv-surya, .venv312, …)
 .venv/
+.venv*/
 venv/
 env/
 .env

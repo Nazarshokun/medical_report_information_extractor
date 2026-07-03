@@ -4,6 +4,7 @@ import base64
 import csv
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -38,22 +39,35 @@ except Exception:  # pragma: no cover - macOS-only, optional
     ocrmac_engine = None
     OCRMAC_AVAILABLE = False
 
-try:
-    # Optional: Datalab lift — on-device PDF/image -> schema JSON via the 9B
-    # datalab-to/lift vision model (HuggingFace backend). torch/transformers are
-    # imported lazily inside lift, so this import succeeds even without the [hf]
-    # extra; the model load then raises a clear install hint if they're missing.
-    from lift import extract as lift_extract, resolve_schema as lift_resolve_schema
-    from lift.model import InferenceManager as LiftInferenceManager
-    from lift.settings import settings as lift_settings
-
-    LIFT_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency
-    lift_extract = lift_resolve_schema = LiftInferenceManager = lift_settings = None
-    LIFT_AVAILABLE = False
-
 APP_TITLE = "Medical Report Information Extractor"
 CONFIG_DIR = Path(__file__).resolve().parent / "config"
+
+# On-device Surya OCR (datalab-to/surya, Apache-2.0), in-process. Its 650M model is
+# served by llama.cpp/Metal (~3 GB), loaded once and kept warm across reruns/files
+# via @st.cache_resource. Needs the `llama-server` binary (brew install llama.cpp);
+# surya imports torch for its small text-detection model.
+try:
+    from surya.inference import SuryaInferenceManager
+    from surya.recognition import RecognitionPredictor
+
+    SURYA_IMPORTED = True
+except Exception:  # pragma: no cover - optional dependency
+    SuryaInferenceManager = RecognitionPredictor = None
+    SURYA_IMPORTED = False
+
+
+def _find_llama_server() -> str | None:
+    found = shutil.which("llama-server")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/llama-server", "/usr/local/bin/llama-server"):
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
+LLAMA_SERVER = _find_llama_server()
+SURYA_AVAILABLE = SURYA_IMPORTED and LLAMA_SERVER is not None
 MULTI_REPORT_CUE_PATTERNS = (
     r"(?im)^\s*(?:pathology report|surgical pathology report|anatomic pathology report)\b",
     r"(?im)^\s*(?:informe(?:\s+de)?\s+anatom[ií]a\s+patol[oó]gica|informe\s+de\s+biopsia)\b",
@@ -902,6 +916,54 @@ def run_apple_vision_ocr(
     return "\n\n".join(parts).strip(), total_pages
 
 
+@st.cache_resource(show_spinner="Loading the Surya OCR model (first run downloads it and starts llama-server)…")
+def get_surya_recognizer():
+    """Load Surya's recognizer once and keep it — and its llama.cpp server — warm.
+
+    SuryaInferenceManager spawns the llama.cpp/Metal server on first use; caching the
+    recognizer means the ~3 GB model loads a single time and is reused across reruns
+    and files instead of re-spawning per PDF.
+    """
+    if LLAMA_SERVER:
+        # Ensure `llama-server` is found even if the app was launched with a minimal PATH.
+        os.environ["PATH"] = str(Path(LLAMA_SERVER).parent) + os.pathsep + os.environ.get("PATH", "")
+    return RecognitionPredictor(SuryaInferenceManager())
+
+
+def _surya_page_text(prediction) -> str:
+    """Assemble readable text from one Surya page prediction's layout blocks."""
+    lines: list[str] = []
+    for block in getattr(prediction, "blocks", None) or []:
+        content = getattr(block, "html", None) or getattr(block, "text", None) or ""
+        content = re.sub(r"</(tr|p|div|h[1-6]|li)>", "\n", content, flags=re.IGNORECASE)
+        content = re.sub(r"</(td|th)>", "\t", content, flags=re.IGNORECASE)
+        cleaned = re.sub(r"<[^>]+>", "", content).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return "\n".join(lines).strip()
+
+
+def run_surya_ocr(pdf_bytes: bytes) -> str:
+    """OCR a PDF in-process with the on-device Surya model, returning "[Page N]" text.
+
+    Pages are rendered with the shared fitz helper and recognized one at a time on the
+    warm, cached model (llama.cpp/Metal, ~3 GB). Raises on failure so the caller can
+    fall back to native text.
+    """
+    from PIL import Image
+
+    recognizer = get_surya_recognizer()
+    page_images, _total = render_pdf_to_images(pdf_bytes, dpi=150, max_pages=50)
+    parts: list[str] = []
+    for page_number, png in enumerate(page_images, start=1):
+        image = Image.open(io.BytesIO(png)).convert("RGB")
+        prediction = recognizer([image])[0]
+        text = _surya_page_text(prediction)
+        if text:
+            parts.append(f"[Page {page_number}]\n{text}")
+    return "\n\n".join(parts).strip()
+
+
 def prepare_pdf_report(
     *,
     report_name: str,
@@ -1005,6 +1067,65 @@ def prepare_pdf_report(
             )
 
         raise RuntimeError("No text could be extracted from this PDF (vision mode).")
+
+    if pdf_input_mode in ("force_surya", "auto_surya_fallback"):
+        run_surya = pdf_input_mode == "force_surya"
+        if pdf_input_mode == "auto_surya_fallback":
+            if native_chars < native_text_min_chars:
+                run_surya = True
+                warnings.append(
+                    f"Native PDF text was short ({native_chars} chars), so Surya OCR was used."
+                )
+            if native_quality_reasons:
+                run_surya = True
+                warnings.append(
+                    "Native PDF text looked low quality, so Surya OCR was used: "
+                    + "; ".join(native_quality_reasons)
+                    + "."
+                )
+
+        if not run_surya:
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=native_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-native",
+                preparation_warnings=warnings,
+            )
+
+        surya_text = ""
+        try:
+            surya_text = run_surya_ocr(pdf_bytes).strip()
+            if surya_text:
+                warnings.append("Surya OCR (on-device, llama.cpp) was used for this report.")
+        except Exception as exc:
+            warnings.append(f"Surya OCR failed: {exc}")
+
+        if surya_text:
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=surya_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-surya",
+                preparation_warnings=warnings,
+            )
+
+        if native_text.strip():
+            warnings.append(
+                "Surya OCR produced no usable text, so native PDF text was used instead."
+            )
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=native_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-native",
+                preparation_warnings=warnings,
+            )
+
+        raise RuntimeError("No text could be extracted from this PDF (Surya OCR).")
 
     if pdf_input_mode in ("force_applevision", "auto_applevision_fallback"):
         run_av = pdf_input_mode == "force_applevision"
@@ -1563,7 +1684,10 @@ def is_local_endpoint(backend: str, base_url: str) -> bool:
     return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"} or host.endswith(".local")
 
 
+@st.fragment
 def render_results(results: list[ExtractionResult], schema: dict) -> None:
+    # A fragment so the "show only problems" toggle and the CSV/ZIP download
+    # buttons rerun only this panel, not the whole script.
     st.subheader("Results")
 
     succeeded = sum(1 for r in results if r.success)
@@ -1572,10 +1696,10 @@ def render_results(results: list[ExtractionResult], schema: dict) -> None:
     )
     failed = sum(1 for r in results if not r.success)
     metric_cols = st.columns(4)
-    metric_cols[0].metric("Reports", len(results))
-    metric_cols[1].metric("Succeeded", succeeded)  # Succeeded + Failed == Reports
-    metric_cols[2].metric("Warnings", warnings_n)
-    metric_cols[3].metric("Failed", failed)
+    metric_cols[0].metric("Reports", len(results), border=True)
+    metric_cols[1].metric("Succeeded", succeeded, border=True)  # Succeeded + Failed == Reports
+    metric_cols[2].metric("Warnings", warnings_n, border=True)
+    metric_cols[3].metric("Failed", failed, border=True)
     st.caption("Showing the most recent extraction run.")
 
     summary_rows = [
@@ -1594,7 +1718,20 @@ def render_results(results: list[ExtractionResult], schema: dict) -> None:
         }
         for result in results
     ]
-    st.dataframe(summary_rows, use_container_width=True)
+    st.dataframe(
+        summary_rows,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "report": st.column_config.TextColumn("Report", pinned=True),
+            "source_file": st.column_config.TextColumn("Source file"),
+            "source": st.column_config.TextColumn("Source"),
+            "text_mode": st.column_config.TextColumn("Text mode"),
+            "status": st.column_config.TextColumn("Status"),
+            "confidence": st.column_config.TextColumn("Confidence"),
+            "validation_errors": st.column_config.NumberColumn("Schema errors", format="%d"),
+        },
+    )
 
     successful_csv_results = [
         result for result in results if result.success and isinstance(result.parsed_json, dict)
@@ -1669,276 +1806,7 @@ def render_results(results: list[ExtractionResult], schema: dict) -> None:
                 st.code(result.raw_response or "No raw response captured.", language="json")
 
 
-# ---------------------------------------------------------------------------
-# Lift engine (Datalab) — optional, self-contained, on-device PDF/image -> JSON.
-#
-# A separate tool from the text pipeline above. Instead of document -> text ->
-# LLM, it renders page images and runs the datalab-to/lift 9B vision model
-# in-process (HuggingFace). It is NOT model-agnostic: it only runs its own
-# model, not the local Ollama/LM Studio LLM the text pipeline can use. Selected
-# via the sidebar radio; when active it renders its own UI and st.stop()s, so
-# the text-pipeline code below is left completely untouched.
-# ---------------------------------------------------------------------------
-ENGINE_TEXT = "Text pipeline (LLM)"
-ENGINE_LIFT = "Lift — on-device PDF/image → JSON (Datalab)"
-
-# Schema keys lift's decoder ignores; used only for a soft "guarantee weakened"
-# warning (they don't stop extraction — the schema still runs).
-LIFT_UNSUPPORTED_SCHEMA_KEYS = ("enum", "anyOf", "oneOf", "$ref", "additionalProperties")
-
-
-@st.cache_resource(show_spinner="Loading the lift model (first run downloads ~18 GB from Hugging Face)…")
-def get_lift_hf_model(device: str):
-    """Load the datalab-to/lift 9B vision model in-process, once per session.
-
-    Cached on `device` so the weights load a single time and are reused across
-    reruns/files. `lift.settings.settings` is a singleton that lift's
-    `load_model()` reads at construction time, so the device is pinned on it here
-    (None -> device_map="auto"; "mps" -> Apple GPU; "cpu" -> slow fallback).
-    """
-    lift_settings.TORCH_DEVICE = device or None
-    lift_settings.MODEL_CHECKPOINT = "datalab-to/lift"
-    return LiftInferenceManager(method="hf")
-
-
-def build_lift_result(
-    out,
-    *,
-    report_name: str,
-    source_file_name: str,
-    source_kind: str,
-    schema: dict,
-    device: str,
-) -> ExtractionResult:
-    """Map a lift BatchOutputItem onto the app's shared ExtractionResult.
-
-    lift returns extraction=None when the model output did not parse as JSON (the
-    HF path is prompt-guided, not grammar-constrained, so that can happen). We
-    reuse the app's jsonschema validator for the same valid / schema-warning
-    labelling used by the text pipeline. The text pipeline's _unverified_markers
-    grounding guard is intentionally NOT applied: it compares marker names against
-    report text, which lift never produces.
-    """
-    parsed = out.extraction if isinstance(out.extraction, dict) else None
-    success = (not out.error) and parsed is not None
-    validation_errors = validate_instance(parsed, schema) if success else []
-    if not success:
-        status_label = "failed"
-    elif validation_errors:
-        status_label = "schema-warning"
-    else:
-        status_label = "valid"
-    return ExtractionResult(
-        report_name=report_name,
-        source_file_name=source_file_name,
-        success=success,
-        status_label=status_label,
-        raw_response=out.raw or "",
-        parsed_json=parsed,
-        validation_errors=validation_errors,
-        source_kind=source_kind,
-        text_extraction_method=f"lift-hf:{device}",
-        preparation_warnings=[],
-        prepared_text="(lift reads page images directly; no text stage)",
-        error_message=None if success else (out.raw or "lift returned an error / unparseable JSON"),
-    )
-
-
-def run_lift_engine() -> None:
-    """Render and run the self-contained on-device Lift extraction tool."""
-    if not LIFT_AVAILABLE:
-        st.info(
-            "The Lift engine needs the optional `lift` package. Install the on-device "
-            'backend with: `pip install "lift-pdf[hf]"` (pulls PyTorch / Transformers and, '
-            "on first run, downloads the ~18 GB `datalab-to/lift` model)."
-        )
-        return
-
-    with st.sidebar:
-        st.header("Lift engine (Datalab)")
-        st.success("Runs on-device — no report data leaves this Mac.")
-        device = st.selectbox(
-            "Device",
-            ["mps", "cpu"],
-            index=0,
-            help="mps = Apple GPU (fast). cpu = fallback if MPS/bfloat16 misbehaves (much slower).",
-        )
-        lift_max_output_tokens = st.number_input(
-            "Max output tokens",
-            min_value=256,
-            max_value=32000,
-            value=12384,
-            step=256,
-            help="Upper bound on generated tokens for the whole document.",
-        )
-        lift_page_range = st.text_input(
-            "Page range (optional)",
-            value="",
-            help='Limit PDF pages, e.g. "0-5,7". Blank = all pages.',
-        )
-        st.caption(
-            "First run downloads the ~18 GB `datalab-to/lift` model. If it is gated, accept the "
-            "license at https://huggingface.co/datalab-to/lift and run `huggingface-cli login`."
-        )
-
-    config_col, report_col = st.columns([1, 1])
-
-    with config_col:
-        st.subheader("Configuration")
-        # Schema presets from config/, with lift's OWN session keys so the two
-        # engines never overwrite each other's edited schema text.
-        schema_choices = {path.name: path for path in sorted(CONFIG_DIR.glob("*.json"))}
-        schema_names = list(schema_choices.keys()) or ["schema_lift.json"]
-        default_name = (
-            "schema_lift.json" if "schema_lift.json" in schema_names else schema_names[0]
-        )
-        selected_schema_name = st.selectbox(
-            "Schema preset",
-            schema_names,
-            index=schema_names.index(default_name),
-            help=(
-                "Lift works best with a flat schema (no enum / unions / additionalProperties). "
-                "schema_lift.json is a ready-made example."
-            ),
-        )
-        if st.session_state.get("_lift_schema_preset") != selected_schema_name:
-            st.session_state["lift_schema_text"] = json.dumps(
-                load_json(schema_choices[selected_schema_name]), indent=2, ensure_ascii=False
-            )
-            st.session_state["_lift_schema_preset"] = selected_schema_name
-
-        schema_file = st.file_uploader(
-            "JSON Schema file (.json) — overrides the preset",
-            type=["json"],
-            key="lift_schema_upload",
-        )
-        if schema_file is not None:
-            upload_id = f"{schema_file.name}:{schema_file.size}"
-            if st.session_state.get("_lift_schema_upload") != upload_id:
-                st.session_state["lift_schema_text"] = schema_file.getvalue().decode(
-                    "utf-8", errors="replace"
-                )
-                st.session_state["_lift_schema_upload"] = upload_id
-
-        schema_text = st.text_area("JSON Schema", key="lift_schema_text", height=320)
-
-        lift_schema_obj = None
-        try:
-            lift_schema_obj = lift_resolve_schema(json.loads(schema_text))
-        except json.JSONDecodeError as exc:
-            st.error(f"Schema is not valid JSON: {exc}")
-        except Exception as exc:
-            st.error(f"Lift can't use this schema: {exc}")
-        if any(key in (schema_text or "") for key in LIFT_UNSUPPORTED_SCHEMA_KEYS):
-            st.warning(
-                "This schema uses enum / anyOf / oneOf / $ref / additionalProperties, which lift's "
-                "decoder ignores — the per-field guarantee is weakened. Prefer a flat schema like "
-                "schema_lift.json."
-            )
-
-    with report_col:
-        st.subheader("Reports")
-        dep_cols = st.columns(2)
-        dep_cols[0].metric("lift", "Found" if LIFT_AVAILABLE else "Missing")
-        dep_cols[1].metric("Device", device)
-        uploaded_pdfs = st.file_uploader(
-            "Upload PDF report files (.pdf)",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key="lift_pdfs",
-        )
-        uploaded_images = st.file_uploader(
-            "Upload image report files (.png/.jpg/.jpeg)",
-            type=["png", "jpg", "jpeg"],
-            accept_multiple_files=True,
-            key="lift_images",
-        )
-        st.info(
-            "Lift sends rendered page images straight to the datalab-to/lift vision model and "
-            "returns JSON matching your schema in a single pass. It does not use your local LLM."
-        )
-
-    run_lift = st.button("Extract with lift (on-device)", type="primary")
-
-    if run_lift:
-        uploads = [(f, "pdf") for f in (uploaded_pdfs or [])] + [
-            (f, "image") for f in (uploaded_images or [])
-        ]
-        if lift_schema_obj is None:
-            st.error("Fix the JSON Schema above before extracting.")
-            st.stop()
-        if not uploads:
-            st.error("Upload at least one PDF or image.")
-            st.stop()
-
-        try:
-            model = get_lift_hf_model(device)
-        except ImportError:
-            st.error('Install the on-device backend: pip install "lift-pdf[hf]"')
-            st.stop()
-        except Exception as exc:
-            st.error(
-                f"Could not load the lift model: {exc}\n\n"
-                "If the model is gated, accept its license at "
-                "https://huggingface.co/datalab-to/lift and run `huggingface-cli login`. "
-                "If this looks like an MPS/bfloat16 error, switch Device to cpu."
-            )
-            st.stop()
-
-        progress = st.progress(0.0)
-        status = st.empty()
-        results: list[ExtractionResult] = []
-        for index, (uploaded, source_kind) in enumerate(uploads, start=1):
-            status.write(f"Extracting {uploaded.name} ({index}/{len(uploads)})")
-            try:
-                with tempfile.TemporaryDirectory(prefix="mrie_lift_") as temp_dir:
-                    file_path = Path(temp_dir) / uploaded.name
-                    file_path.write_bytes(uploaded.getvalue())
-                    out = lift_extract(
-                        str(file_path),
-                        lift_schema_obj,
-                        model=model,
-                        page_range=(lift_page_range.strip() or None),
-                        max_output_tokens=int(lift_max_output_tokens),
-                    )
-                results.append(
-                    build_lift_result(
-                        out,
-                        report_name=uploaded.name,
-                        source_file_name=uploaded.name,
-                        source_kind=source_kind,
-                        schema=lift_schema_obj,
-                        device=device,
-                    )
-                )
-            except Exception as exc:
-                results.append(
-                    ExtractionResult(
-                        report_name=uploaded.name,
-                        source_file_name=uploaded.name,
-                        success=False,
-                        status_label="failed",
-                        raw_response="",
-                        parsed_json=None,
-                        validation_errors=[],
-                        source_kind=source_kind,
-                        text_extraction_method=f"lift-hf:{device}",
-                        preparation_warnings=[],
-                        prepared_text="",
-                        error_message=str(exc),
-                    )
-                )
-            progress.progress(index / len(uploads))
-        progress.empty()
-        status.empty()
-        st.session_state["lift_last_run"] = {"results": results, "schema": lift_schema_obj}
-
-    if st.session_state.get("lift_last_run"):
-        last_run = st.session_state["lift_last_run"]
-        render_results(last_run["results"], last_run["schema"])
-
-
-st.set_page_config(page_title=APP_TITLE, layout="wide")
+st.set_page_config(page_title=APP_TITLE, page_icon=":material/biotech:", layout="wide")
 st.title(APP_TITLE)
 st.write(
     "A separate Streamlit project that mirrors the paper's approach: report text "
@@ -1949,21 +1817,6 @@ st.caption(
     "This app accepts plaintext reports or PDFs. Word-generated PDFs can use native "
     "text extraction, while scanned PDFs can use OCR. De-identification is still outside this project."
 )
-
-# Extraction engine selector. Selecting Lift runs a self-contained on-device tool
-# and st.stop()s, so the text-pipeline UI below never renders for it.
-engine = st.sidebar.radio(
-    "Extraction engine",
-    [ENGINE_TEXT, ENGINE_LIFT],
-    help=(
-        "Text pipeline: OCR / vision → text → your chosen LLM (OpenAI, Claude, local "
-        "Ollama/LM Studio) with a JSON Schema. Lift: rendered page images straight into "
-        "the datalab-to/lift 9B vision model, on-device (its own model, not your local LLM)."
-    ),
-)
-if engine == ENGINE_LIFT:
-    run_lift_engine()
-    st.stop()
 
 default_instructions = load_text(CONFIG_DIR / "instructions.txt")
 default_schema = load_json(CONFIG_DIR / "schema.json")
@@ -2163,6 +2016,14 @@ with st.sidebar:
         pdf_mode_labels["force_applevision"] = "Force Apple Vision OCR (on-device, macOS)"
         # On-device Apple Vision sits right after the Tesseract OCR options.
         pdf_mode_options[3:3] = ["auto_applevision_fallback", "force_applevision"]
+    if SURYA_AVAILABLE:
+        pdf_mode_labels["auto_surya_fallback"] = (
+            "Auto: native text, Surya OCR if short or low quality"
+        )
+        pdf_mode_labels["force_surya"] = (
+            "Force Surya OCR (on-device, llama.cpp, ~3 GB) — recommended"
+        )
+        pdf_mode_options.extend(["auto_surya_fallback", "force_surya"])
     pdf_input_mode = st.selectbox(
         "PDF text preparation",
         pdf_mode_options,
@@ -2207,15 +2068,47 @@ config_col, report_col = st.columns([1, 1])
 with config_col:
     st.subheader("Configuration")
 
-    instructions_file = st.file_uploader("Instructions file (.txt)", type=["txt"])
-    instructions_text = (
-        instructions_file.getvalue().decode("utf-8", errors="replace")
-        if instructions_file is not None
-        else default_instructions
+    # Instructions presets live in config/instructions/*.txt (created on the
+    # "Instructions manager" page); "(default)" is config/instructions.txt. Mirrors
+    # the schema-preset dropdown below.
+    instr_dir = CONFIG_DIR / "instructions"
+    instr_choices = (
+        {path.stem: path for path in sorted(instr_dir.glob("*.txt"))}
+        if instr_dir.is_dir()
+        else {}
     )
+    instr_names = ["(default)", *instr_choices.keys()]
+    selected_instr = st.selectbox(
+        "Instructions preset",
+        instr_names,
+        index=0,
+        help=(
+            "Presets from config/instructions/ (build them on the Instructions manager "
+            "page). Editing the text below or uploading a file overrides the preset."
+        ),
+    )
+    if st.session_state.get("_instr_preset_loaded") != selected_instr:
+        st.session_state["instructions_text"] = (
+            load_text(instr_choices[selected_instr])
+            if selected_instr in instr_choices
+            else default_instructions
+        )
+        st.session_state["_instr_preset_loaded"] = selected_instr
+
+    instructions_file = st.file_uploader(
+        "Instructions file (.txt) — overrides the preset", type=["txt"]
+    )
+    if instructions_file is not None:
+        instr_upload_id = f"{instructions_file.name}:{instructions_file.size}"
+        if st.session_state.get("_instr_upload_loaded") != instr_upload_id:
+            st.session_state["instructions_text"] = instructions_file.getvalue().decode(
+                "utf-8", errors="replace"
+            )
+            st.session_state["_instr_upload_loaded"] = instr_upload_id
+
     instructions_text = st.text_area(
         "Task instructions",
-        value=instructions_text,
+        key="instructions_text",
         height=220,
     )
 
@@ -2224,7 +2117,6 @@ with config_col:
         "schema.json": "Full — all dedicated marker fields (schema.json)",
         "schema_fast.json": "Fast / free-form — metadata + all-markers catch-all (schema_fast.json)",
         "schema_ukr.json": "Ukrainian — full (schema_ukr.json)",
-        "schema_lift.json": "Lift-friendly — flat metadata + markers list (schema_lift.json)",
     }
     schema_names = list(schema_choices.keys()) or ["schema.json"]
     default_schema_index = (
