@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "properties": {
+    "patient_name": {
+      "type": "string",
+      "description": "Patient full name if present"
+    },
+    "report_date": {
+      "type": "string",
+      "description": "Report or collection date as printed"
+    },
+    "specimen": {
+      "type": "string",
+      "description": "Specimen / tissue site"
+    },
+    "final_diagnosis": {
+      "type": "string",
+      "description": "Final pathologic diagnosis"
+    },
+    "immunohistochemistry_markers": {
+      "type": "array",
+      "description": "One entry per immunohistochemistry marker result in the report",
+      "items": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "Marker name, e.g. CD20, CD3, Ki-67, BCL2"
+          },
+          "result": {
+            "type": "string",
+            "description": "Result exactly as printed: positive / negative / a percentage / a score"
+          }
+        }
+      }
+    },
+    "ki67_percent": {
+      "type": "number",
+      "description": "Ki-67 / MIB-1 proliferation index as a percentage, if stated"
+    }
+  },
+  "required": ["final_diagnosis"]
+}

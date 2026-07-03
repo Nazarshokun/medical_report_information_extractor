@@ -1,5 +1,18 @@
 streamlit>=1.34.0
-openai>=1.35.0
+openai>=2.40.0  # bumped from >=1.35.0 for lift-pdf; the app's OpenAI calls are v2-compatible
 anthropic>=0.40.0
 jsonschema>=4.23.0
 PyMuPDF>=1.24.0
+
+# Apple Vision on-device OCR (macOS only). Enables the "Apple Vision OCR" PDF
+# modes. The env marker makes pip skip it on non-macOS. Pulls in Pillow + pyobjc.
+ocrmac ; sys_platform == "darwin"
+
+# Optional: Datalab lift engine (local, on-device). Runs the datalab-to/lift 9B
+# vision model in-process via HuggingFace + PyTorch (MPS on Apple Silicon) to
+# extract JSON directly from PDFs/images. Kept commented because it is heavy: it
+# pulls torch/transformers and downloads ~18 GB of gated weights on first use
+# (accept the license at https://huggingface.co/datalab-to/lift and run
+# `huggingface-cli login`). Enable the "Lift" extraction engine with:
+#   pip install "lift-pdf[hf]"
+# lift-pdf[hf] ; python_version >= "3.12"

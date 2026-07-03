@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 800" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="480" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Local, on-premises LLM workflow for structured IHC report extraction</text>
+
+  <!-- On-premises boundary -->
+  <rect x="30" y="50" width="900" height="580" rx="14" fill="#f0fdfa" stroke="#0d9488" stroke-width="2" stroke-dasharray="8 5"/>
+  <text x="46" y="72" font-size="12.5" font-weight="700" fill="#0d9488">LOCAL &#183; ON-PREMISES &#8212; no report text or image leaves the machine (no cloud / third party)</text>
+
+  <!-- A: input -->
+  <rect x="350" y="92" width="260" height="50" rx="8" fill="#e0f2fe" stroke="#0ea5e9" stroke-width="1.5"/>
+  <text x="480" y="122" text-anchor="middle" font-size="14" font-weight="600" fill="#075985">PDF pathology / IHC reports</text>
+  <line x1="480" y1="142" x2="480" y2="168" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- B: text extraction -->
+  <rect x="260" y="168" width="440" height="96" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="480" y="194" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">1 &#183; On-device text extraction</text>
+  <text x="480" y="220" text-anchor="middle" font-size="12.5" fill="#334155">Native PDF text extraction (PyMuPDF)</text>
+  <text x="480" y="244" text-anchor="middle" font-size="12.5" fill="#334155">Fallback &#8594; local OCR (Tesseract / Apple Vision)</text>
+  <line x1="480" y1="264" x2="480" y2="292" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Inputs row -->
+  <rect x="100" y="292" width="200" height="60" rx="8" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="200" y="318" text-anchor="middle" font-size="13.5" font-weight="600" fill="#3730a3">Instruction prompt</text>
+  <text x="200" y="338" text-anchor="middle" font-size="11.5" font-style="italic" fill="#6366f1">(editable)</text>
+
+  <rect x="380" y="292" width="200" height="60" rx="8" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="480" y="318" text-anchor="middle" font-size="13.5" font-weight="600" fill="#3730a3">Report text</text>
+  <text x="480" y="338" text-anchor="middle" font-size="11.5" font-style="italic" fill="#6366f1">(from extraction)</text>
+
+  <rect x="660" y="292" width="200" height="60" rx="8" fill="#eef2ff" stroke="#818cf8" stroke-width="1.5"/>
+  <text x="760" y="318" text-anchor="middle" font-size="13.5" font-weight="600" fill="#3730a3">JSON Schema</text>
+  <text x="760" y="338" text-anchor="middle" font-size="11.5" font-style="italic" fill="#6366f1">(user-defined)</text>
+
+  <!-- Converging arrows to model -->
+  <line x1="200" y1="352" x2="400" y2="396" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="480" y1="352" x2="480" y2="396" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="760" y1="352" x2="560" y2="396" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Model -->
+  <rect x="270" y="396" width="420" height="74" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="2.5"/>
+  <text x="480" y="424" text-anchor="middle" font-size="14" font-weight="700" fill="#5b21b6">2 &#183; Local LLM &#8212; Gemma 4 (4 billion parameters)</text>
+  <text x="480" y="448" text-anchor="middle" font-size="12.5" fill="#5b21b6">Schema-constrained decoding &#8594; one JSON object per report</text>
+  <line x1="480" y1="470" x2="480" y2="500" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Output -->
+  <rect x="220" y="500" width="520" height="104" rx="8" fill="#dcfce7" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="480" y="528" text-anchor="middle" font-size="14" font-weight="700" fill="#166534">3 &#183; Structured JSON output (per report)</text>
+  <text x="480" y="556" text-anchor="middle" font-size="12.5" fill="#166534">Markers coded:  1 = positive  &#183;  0 = negative  &#183;  blank = not done</text>
+  <text x="480" y="580" text-anchor="middle" font-size="12.5" fill="#166534">Free-text fields translated into English</text>
+
+  <!-- Output -> Evaluation (separate QA step) -->
+  <line x1="480" y1="604" x2="480" y2="660" stroke="#475569" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <text x="492" y="640" font-size="11" font-style="italic" fill="#92400e">evaluation on a sample</text>
+
+  <!-- Evaluation -->
+  <rect x="220" y="660" width="520" height="104" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="480" y="688" text-anchor="middle" font-size="14" font-weight="700" fill="#92400e">Quality evaluation</text>
+  <text x="480" y="716" text-anchor="middle" font-size="12.5" fill="#92400e">20 reports &#183; N markers each  (each marker = 1 unit)</text>
+  <text x="480" y="740" text-anchor="middle" font-size="12.5" fill="#92400e">Error rate = wrong extractions &#247; total markers &#215; 100%</text>
+</svg>

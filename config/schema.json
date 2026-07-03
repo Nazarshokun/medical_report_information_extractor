@@ -742,13 +742,14 @@
         "array",
         "null"
       ],
+      "maxItems": 100,
       "description": "Catch-all for ANY immunohistochemistry or flow-cytometry marker reported that does NOT already have its own dedicated field above. Add one entry per such marker. Do NOT include markers that already have a dedicated field. Use null or an empty array if there are none.",
       "items": {
         "type": "object",
         "properties": {
           "marker": {
             "type": "string",
-            "description": "Marker name exactly as written in the report (e.g. CD20, PAX5, MUM1, BCL2)."
+            "description": "Standardized marker/antigen name in English (the antigen the antibody detects), e.g. CD20, PAX5, Ki-67, Cyclin D1, TdT, c-Myc, BCL2, MUM1. Do NOT use the vendor, catalog code, or antibody clone as the name (e.g. DAKO, polyclonal, clone L26 / Ber-H2 / MIB-1 / EP12 / EP266). If only a clone/vendor code is given and the antigen is NOT named, do not guess a CD/antigen number — a clone code is not a CD number (clone 124 is not CD124); keep the verbatim clone text as the marker name. Only convert textbook-certain clones (L26 -> CD20, MIB-1 -> Ki-67, Ber-H2 -> CD30), and prefer antigen names stated in the microscopy narrative. Translate non-English names to standard nomenclature (e.g. Кі-67 -> Ki-67, Циклін D1 -> Cyclin D1). Put the original written text (vendor / clone / percentage) in raw_text."
           },
           "value": {
             "type": [
@@ -833,7 +834,28 @@
         "string",
         "null"
       ],
+      "maxLength": 12000,
       "description": "Extract all microscopy and immunohistochemistry text from the report and output it in English. The report may be in any language; translate it into English."
+    },
+    "extraction_confidence": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        null
+      ],
+      "description": "Overall confidence that the coded marker results are correct and complete: 'high' = text clear and results explicit; 'medium' = some ambiguity; 'low' = text garbled/OCR-poor or results unclear. Judge legibility and result clarity, not the diagnosis."
+    },
+    "extraction_confidence_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "One short sentence on what made the markers easy or hard to determine (e.g. clear text, OCR garbling, ambiguous or missing results)."
     }
   },
   "required": [
@@ -902,6 +924,8 @@
     "specimen_site",
     "diagnosis",
     "ki67_percent",
-    "text_from_report"
+    "text_from_report",
+    "extraction_confidence",
+    "extraction_confidence_reason"
   ]
 }

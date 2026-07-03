@@ -21,17 +21,28 @@
     },
     "text_from_report": {
       "type": ["string", "null"],
+      "maxLength": 12000,
       "description": "All microscopy and immunohistochemistry text from the report, output in English. The report may be in any language; translate it into English."
+    },
+    "extraction_confidence": {
+      "type": ["string", "null"],
+      "enum": ["high", "medium", "low", null],
+      "description": "Overall confidence that the coded marker results are correct and complete: 'high' = text clear and results explicit; 'medium' = some ambiguity; 'low' = text garbled/OCR-poor or results unclear. Judge legibility and result clarity, not the diagnosis."
+    },
+    "extraction_confidence_reason": {
+      "type": ["string", "null"],
+      "description": "One short sentence on what made the markers easy or hard to determine (e.g. clear text, OCR garbling, ambiguous or missing results)."
     },
     "additional_markers": {
       "type": ["array", "null"],
+      "maxItems": 100,
       "description": "List EVERY immunohistochemistry or flow-cytometry marker reported in the document. One entry per marker. Use null or an empty array if no markers are reported.",
       "items": {
         "type": "object",
         "properties": {
           "marker": {
             "type": "string",
-            "description": "Marker name exactly as written in the report (e.g. CD20, CD3, CD30, Ki-67, ALK, BCL6, MUM1, EMA)."
+            "description": "Standardized marker/antigen name in English (the antigen the antibody detects), e.g. CD20, CD3, Ki-67, Cyclin D1, TdT, c-Myc, BCL2, MUM1. Do NOT use the vendor, catalog code, or antibody clone as the name (e.g. DAKO, polyclonal, clone L26 / Ber-H2 / MIB-1 / EP12 / EP266). If only a clone/vendor code is given and the antigen is NOT named, do not guess a CD/antigen number — a clone code is not a CD number (clone 124 is not CD124); keep the verbatim clone text as the marker name. Only convert textbook-certain clones (L26 -> CD20, MIB-1 -> Ki-67, Ber-H2 -> CD30), and prefer antigen names stated in the microscopy narrative. Translate non-English names to standard nomenclature (e.g. Кі-67 -> Ki-67, Циклін D1 -> Cyclin D1). Put the original written text (vendor / clone / percentage) in raw_text."
           },
           "value": {
             "type": ["integer", "null"],
@@ -54,6 +65,8 @@
     "report_date",
     "not_report",
     "text_from_report",
-    "additional_markers"
+    "additional_markers",
+    "extraction_confidence",
+    "extraction_confidence_reason"
   ]
 }

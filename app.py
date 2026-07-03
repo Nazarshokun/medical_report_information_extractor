@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 import io
 import json
@@ -8,13 +9,15 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import fitz
 import streamlit as st
 from jsonschema import Draft202012Validator
-from openai import OpenAI
+from openai import BadRequestError, OpenAI, UnprocessableEntityError
 
 try:
     # Optional: only needed for the Anthropic (Claude) backend. The app still
@@ -25,6 +28,29 @@ try:
 except ImportError:  # pragma: no cover - depends on local environment
     Anthropic = None
     ANTHROPIC_AVAILABLE = False
+
+try:
+    # Optional: Apple Vision on-device OCR (macOS only). Pulls Pillow + pyobjc.
+    from ocrmac import ocrmac as ocrmac_engine
+
+    OCRMAC_AVAILABLE = True
+except Exception:  # pragma: no cover - macOS-only, optional
+    ocrmac_engine = None
+    OCRMAC_AVAILABLE = False
+
+try:
+    # Optional: Datalab lift — on-device PDF/image -> schema JSON via the 9B
+    # datalab-to/lift vision model (HuggingFace backend). torch/transformers are
+    # imported lazily inside lift, so this import succeeds even without the [hf]
+    # extra; the model load then raises a clear install hint if they're missing.
+    from lift import extract as lift_extract, resolve_schema as lift_resolve_schema
+    from lift.model import InferenceManager as LiftInferenceManager
+    from lift.settings import settings as lift_settings
+
+    LIFT_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    lift_extract = lift_resolve_schema = LiftInferenceManager = lift_settings = None
+    LIFT_AVAILABLE = False
 
 APP_TITLE = "Medical Report Information Extractor"
 CONFIG_DIR = Path(__file__).resolve().parent / "config"
@@ -99,6 +125,22 @@ class ExtractionResult:
     error_message: str | None = None
 
 
+@dataclass
+class ExtractionOutcome:
+    """Extraction result for one report, without per-file metadata.
+
+    Cached on (report text + all model/schema/prompt settings); metadata such as
+    report_name / source_kind / preparation_warnings is attached afterwards.
+    """
+
+    success: bool
+    status_label: str
+    raw_response: str
+    parsed_json: dict | list | None
+    validation_errors: list[str]
+    error_message: str | None = None
+
+
 def load_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -138,13 +180,72 @@ def _extract_json_blob(text: str) -> str:
     return without_think[start : end + 1]
 
 
+def _repair_truncated_json(text: str) -> str:
+    """Best-effort completion of JSON that was truncated mid-generation.
+
+    When a model loops inside a string value and then hits the output-token cap,
+    it leaves an unterminated string and unclosed objects/arrays (the classic
+    "Unterminated string" decode error). We walk the text tracking string/escape
+    state to find what is still open, drop a dangling escape, close an open
+    string, strip a trailing comma or dangling key colon, and append the missing
+    closers. This lets the fields generated before the runaway one (e.g. all the
+    markers) still be parsed instead of losing the whole extraction.
+    """
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]" and stack:
+            stack.pop()
+
+    repaired = text
+    if in_string:
+        if escaped:
+            # Cut off right after a lone backslash; drop it so we don't emit a
+            # dangling escape when we add the closing quote.
+            repaired = repaired[:-1]
+        repaired += '"'
+    repaired = re.sub(r"[\s,]+$", "", repaired)
+    if repaired.endswith(":"):
+        # Truncated right after a key, e.g. `"ki67_percent":` -> give it a value.
+        repaired += " null"
+    repaired += "".join(reversed(stack))
+    return repaired
+
+
 def parse_json_response(text: str) -> dict | list:
     cleaned = strip_code_fences(text)
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        # Fall back to pulling the JSON out of any thinking/prose wrapper.
-        return json.loads(_extract_json_blob(cleaned))
+    # 1) Plain parse, then 2) pull the JSON out of any thinking/prose wrapper.
+    for candidate in (cleaned, _extract_json_blob(cleaned)):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    # 3) Last resort: the model likely looped inside a value and was cut off by
+    # the token cap, leaving truncated JSON. Repair and retry — the full text
+    # first so trailing complete fields survive, then the extracted blob.
+    for candidate in (cleaned, _extract_json_blob(cleaned)):
+        try:
+            return json.loads(_repair_truncated_json(candidate))
+        except json.JSONDecodeError:
+            continue
+    # Nothing recovered; re-raise the original decode error for the caller to
+    # record this report as failed.
+    return json.loads(cleaned)
 
 
 def validate_schema(schema: dict) -> None:
@@ -165,9 +266,17 @@ def validate_instance(instance: dict | list, schema: dict) -> list[str]:
 def scalar_to_csv_cell(value) -> str:
     if value is None:
         return ""
-    if isinstance(value, (str, int, float, bool)):
+    # Numbers/bools are safe as-is (and must not be apostrophe-prefixed).
+    if isinstance(value, bool) or isinstance(value, (int, float)):
         return str(value)
-    return json.dumps(value, ensure_ascii=False)
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    # Neutralize spreadsheet formula injection (CWE-1236): a cell starting with
+    # = + - @ (or a leading tab/CR) can execute as a formula in Excel/Sheets, and
+    # LLM-derived free text (diagnosis, names, extra__* markers) flows in here.
+    # The raw values stay intact in the JSON/ZIP outputs.
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        text = "'" + text
+    return text
 
 
 EXTRA_MARKER_PREFIX = "extra__"
@@ -307,14 +416,35 @@ def run_chat_json(
     model: str,
     system: str,
     user: str,
-    use_json_mode: bool,
+    json_mode: str,
+    schema: dict | None = None,
     temperature: float,
     max_tokens: int,
-) -> str:
-    """Send one prompt and return the raw model text (expected to be JSON).
+) -> tuple[str, str]:
+    """Send one prompt and return (raw model text, finish_reason).
+
+    finish_reason is "length" when the model was cut off at the token cap
+    (truncated output / likely a repetition loop), otherwise "stop". Callers use
+    it to retry with a bigger budget or to flag the result as truncated.
 
     Both backends receive an identical (system, user) split so prompts and
     downstream JSON parsing stay uniform across providers.
+
+    `json_mode` selects how an OpenAI-compatible server is asked to constrain
+    its output:
+      - "json_schema": grammar-constrain decoding to `schema` via
+        `response_format={"type": "json_schema", ...}`. This is the only mode
+        that actually forces the model to emit the schema's required fields, so
+        it makes loosely-constrained runtimes (notably LM Studio's MLX engine)
+        behave like the stricter ones (Ollama / llama.cpp GGUF). Without a
+        `schema` it degrades to "json_object".
+      - "json_object": only forces syntactically valid JSON (schema not
+        enforced).
+      - "off": no `response_format` at all.
+
+    Servers that do not understand a given `response_format` answer with a
+    400/422; we transparently step down to the next-weaker option so an older
+    Ollama/llama.cpp build keeps working instead of hard-failing.
     """
     if backend == "anthropic":
         # The Anthropic Messages API takes the system prompt as a top-level
@@ -326,13 +456,15 @@ def run_chat_json(
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-        if getattr(message, "stop_reason", None) == "refusal":
+        stop_reason = getattr(message, "stop_reason", None)
+        if stop_reason == "refusal":
             raise RuntimeError("The model declined to respond to this request (safety refusal).")
-        return "".join(
+        text = "".join(
             block.text
             for block in message.content
             if getattr(block, "type", None) == "text"
         )
+        return text, ("length" if stop_reason == "max_tokens" else "stop")
 
     request_kwargs = {
         "model": model,
@@ -346,9 +478,126 @@ def run_chat_json(
             {"role": "user", "content": user},
         ],
     }
-    if use_json_mode:
-        request_kwargs["response_format"] = {"type": "json_object"}
-    completion = client.chat.completions.create(**request_kwargs)
+
+    # Fallback ladder of response_format values, strongest first. We try each in
+    # order and step down only when the server rejects the request itself
+    # (400/422) — which is how OpenAI-compatible servers signal an unsupported
+    # `response_format`. Other errors (auth, connection, 5xx) propagate as-is.
+    response_formats: list[dict | None] = []
+    if json_mode == "json_schema" and schema is not None:
+        # Strip the `$schema` meta-key on a shallow copy: some structured-output
+        # backends (incl. OpenAI strict mode) reject it, which would needlessly
+        # drop us to json_object. The original `schema` is left untouched because
+        # it is reused for validation and CSV building.
+        schema_payload = {key: value for key, value in schema.items() if key != "$schema"}
+        response_formats.append(
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "extraction",
+                    "schema": schema_payload,
+                    "strict": True,
+                },
+            }
+        )
+    if json_mode in ("json_schema", "json_object"):
+        response_formats.append({"type": "json_object"})
+    response_formats.append(None)
+
+    last_error: Exception | None = None
+    for response_format in response_formats:
+        if response_format is None:
+            request_kwargs.pop("response_format", None)
+        else:
+            request_kwargs["response_format"] = response_format
+        try:
+            completion = client.chat.completions.create(**request_kwargs)
+            choice = completion.choices[0]
+            return (choice.message.content or ""), (choice.finish_reason or "stop")
+        except (BadRequestError, UnprocessableEntityError) as exc:
+            last_error = exc
+    # Every response_format (including the unconstrained one) was rejected.
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Chat completion request failed.")
+
+
+TRANSCRIBE_SYSTEM = (
+    "You are a precise medical-document transcriber. You receive an image of a "
+    "single page of a pathology / immunohistochemistry report. Transcribe ALL "
+    "text exactly as printed, in reading order. Preserve the structure of marker "
+    "result tables by keeping each marker on its own line next to its result "
+    "(plain text, or a simple Markdown table). Do NOT interpret, summarize, "
+    "translate, correct, or invent anything — output only what is on the page. "
+    "Mark anything you cannot read as [illegible]."
+)
+
+
+def run_vision_transcription(
+    *,
+    backend: str,
+    client,
+    model: str,
+    image_png: bytes,
+    temperature: float,
+    max_tokens: int,
+) -> str:
+    """Transcribe one rendered PDF page image to text via a vision-capable model.
+
+    An alternative to OCR for scanned/image PDFs: the page is rendered to an image
+    and a VLM reads it. The transcription then flows through the normal text
+    pipeline (triage + schema-constrained extraction), so this is "smarter OCR"
+    rather than image->JSON — which keeps the structured-output guarantees and
+    reduces hallucination versus asking the VLM to fill the schema directly.
+    """
+    encoded = base64.b64encode(image_png).decode("ascii")
+    user_text = "Transcribe this report page."
+    if backend == "anthropic":
+        message = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=TRANSCRIBE_SYSTEM,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_text},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": encoded,
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+        return "".join(
+            block.text
+            for block in message.content
+            if getattr(block, "type", None) == "text"
+        )
+
+    completion = client.chat.completions.create(
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        messages=[
+            {"role": "system", "content": TRANSCRIBE_SYSTEM},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                    },
+                ],
+            },
+        ],
+    )
     return completion.choices[0].message.content or ""
 
 
@@ -385,13 +634,13 @@ def triage_document(
     extraction whenever the result is not "pathology".
     """
     user = "Document text:\n\n" + report_text[:6000] + "\n\nClassification:"
-    raw = run_chat_json(
+    raw, _finish = run_chat_json(
         backend=backend,
         client=client,
         model=model,
         system=TRIAGE_SYSTEM,
         user=user,
-        use_json_mode=False,
+        json_mode="off",
         temperature=temperature,
         max_tokens=8,
     )
@@ -475,6 +724,34 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> tuple[str, int]:
         doc.close()
 
 
+VISION_RENDER_DPI = 200
+VISION_MAX_PAGES = 10
+
+
+def render_pdf_to_images(
+    pdf_bytes: bytes, *, dpi: int = VISION_RENDER_DPI, max_pages: int = VISION_MAX_PAGES
+) -> tuple[list[bytes], int]:
+    """Render up to `max_pages` PDF pages to PNG bytes for a vision model or OCR.
+
+    Reuses the already-imported PyMuPDF (fitz), so no new dependency is needed.
+    Returns (images, total_page_count) so callers can warn when a long PDF was
+    truncated to `max_pages`. `dpi` trades resolution (small marker-text
+    legibility) against image token / OCR cost; 200 is a good default.
+    """
+    images: list[bytes] = []
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        total_pages = doc.page_count
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        for page_index in range(min(total_pages, max_pages)):
+            pixmap = doc.load_page(page_index).get_pixmap(matrix=matrix)
+            images.append(pixmap.tobytes("png"))
+        return images, total_pages
+    finally:
+        doc.close()
+
+
 def assess_text_quality(report_text: str) -> tuple[float, list[str]]:
     lines = [
         line.strip()
@@ -509,6 +786,7 @@ def assess_text_quality(report_text: str) -> tuple[float, list[str]]:
     return score, reasons
 
 
+@st.cache_data(show_spinner=False)
 def run_ocrmypdf_and_extract_text(
     *,
     pdf_bytes: bytes,
@@ -559,6 +837,71 @@ def run_ocrmypdf_and_extract_text(
         return ocr_text, logs
 
 
+TESSERACT_TO_APPLE_LANG = {
+    "eng": "en-US",
+    "ukr": "uk-UA",
+    "rus": "ru-RU",
+    "spa": "es-ES",
+    "por": "pt-PT",
+    "deu": "de-DE",
+    "fra": "fr-FR",
+    "ita": "it-IT",
+}
+
+APPLEVISION_MAX_PAGES = 50
+
+
+def _apple_vision_languages(ocr_languages: str) -> list[str] | None:
+    """Map the (tesseract-style) OCR-language field to Apple Vision BCP-47 codes."""
+    codes = [c.strip() for c in (ocr_languages or "").replace("+", " ").split() if c.strip()]
+    mapped = [TESSERACT_TO_APPLE_LANG.get(code, code) for code in codes]
+    return mapped or None
+
+
+def _apple_vision_page_text(png_bytes: bytes, languages: list[str] | None) -> str:
+    from PIL import Image  # pulled in by ocrmac; imported lazily
+
+    image = Image.open(io.BytesIO(png_bytes))
+    # unit="line" returns one entry per text line (cleaner than the default
+    # token granularity, which would scatter each word onto its own line).
+    annotations = ocrmac_engine.OCR(
+        image, language_preference=languages, unit="line"
+    ).recognize()
+    # Each annotation is (text, confidence, [x, y, w, h]) with NORMALIZED coords
+    # and a BOTTOM-LEFT origin, so the top of the page has the LARGEST y. Sort by
+    # descending y (top -> bottom), then ascending x, to recover reading order.
+    ordered = sorted(annotations, key=lambda ann: (-round(ann[2][1], 2), ann[2][0]))
+    return "\n".join(
+        text for text, _conf, _box in ordered if text and text.strip()
+    ).strip()
+
+
+def run_apple_vision_ocr(
+    *,
+    pdf_bytes: bytes,
+    ocr_languages: str,
+    dpi: int = VISION_RENDER_DPI,
+    max_pages: int = APPLEVISION_MAX_PAGES,
+) -> tuple[str, int]:
+    """OCR a PDF on-device with Apple's Vision framework (macOS).
+
+    Returns (text, total_page_count). Renders pages with the shared fitz helper,
+    runs Apple Vision per page, and joins with the "[Page N]" convention.
+    """
+    if not OCRMAC_AVAILABLE:
+        raise RuntimeError(
+            "Apple Vision OCR (ocrmac) is not installed. On macOS run: pip install ocrmac"
+        )
+    images, total_pages = render_pdf_to_images(pdf_bytes, dpi=dpi, max_pages=max_pages)
+    languages = _apple_vision_languages(ocr_languages)
+    parts: list[str] = []
+    for page_number, png_bytes in enumerate(images, start=1):
+        page_text = _apple_vision_page_text(png_bytes, languages)
+        if page_text:
+            parts.append(f"[Page {page_number}]\n{page_text}")
+    return "\n\n".join(parts).strip(), total_pages
+
+
 def prepare_pdf_report(
     *,
     report_name: str,
@@ -567,6 +910,7 @@ def prepare_pdf_report(
     native_text_min_chars: int,
     ocr_languages: str,
     ocrmypdf_path: str | None,
+    transcribe_images: Callable[[list[bytes]], str] | None = None,
 ) -> PreparedReport:
     native_text, native_chars = extract_text_from_pdf_bytes(pdf_bytes)
     warnings: list[str] = []
@@ -587,6 +931,146 @@ def prepare_pdf_report(
             text_extraction_method="pdf-native",
             preparation_warnings=warnings,
         )
+
+    if pdf_input_mode in ("force_vision", "auto_vision_fallback"):
+        run_vision = pdf_input_mode == "force_vision"
+        if pdf_input_mode == "auto_vision_fallback":
+            if native_chars < native_text_min_chars:
+                run_vision = True
+                warnings.append(
+                    f"Native PDF text was short ({native_chars} chars), so a vision model was used."
+                )
+            if native_quality_reasons:
+                run_vision = True
+                warnings.append(
+                    "Native PDF text looked low quality, so a vision model was used: "
+                    + "; ".join(native_quality_reasons)
+                    + "."
+                )
+
+        if not run_vision:
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=native_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-native",
+                preparation_warnings=warnings,
+            )
+
+        if transcribe_images is None:
+            raise RuntimeError(
+                "Vision mode was selected, but no vision model is configured for this run."
+            )
+
+        vision_text = ""
+        try:
+            page_images, total_pages = render_pdf_to_images(pdf_bytes)
+            if total_pages > len(page_images):
+                warnings.append(
+                    f"PDF has {total_pages} pages; only the first {len(page_images)} "
+                    "were sent to the vision model."
+                )
+            if page_images:
+                vision_text = transcribe_images(page_images).strip()
+                warnings.append(
+                    f"A vision model transcribed {len(page_images)} page image(s)."
+                )
+            else:
+                warnings.append("No page images could be rendered from this PDF.")
+        except Exception as exc:
+            warnings.append(f"Vision transcription failed: {exc}")
+
+        if vision_text:
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=vision_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-vision",
+                preparation_warnings=warnings,
+            )
+
+        if native_text.strip():
+            warnings.append(
+                "Vision produced no usable text, so native PDF text was used instead."
+            )
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=native_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-native",
+                preparation_warnings=warnings,
+            )
+
+        raise RuntimeError("No text could be extracted from this PDF (vision mode).")
+
+    if pdf_input_mode in ("force_applevision", "auto_applevision_fallback"):
+        run_av = pdf_input_mode == "force_applevision"
+        if pdf_input_mode == "auto_applevision_fallback":
+            if native_chars < native_text_min_chars:
+                run_av = True
+                warnings.append(
+                    f"Native PDF text was short ({native_chars} chars), so Apple Vision OCR was used."
+                )
+            if native_quality_reasons:
+                run_av = True
+                warnings.append(
+                    "Native PDF text looked low quality, so Apple Vision OCR was used: "
+                    + "; ".join(native_quality_reasons)
+                    + "."
+                )
+
+        if not run_av:
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=native_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-native",
+                preparation_warnings=warnings,
+            )
+
+        av_text = ""
+        try:
+            av_text, total_pages = run_apple_vision_ocr(
+                pdf_bytes=pdf_bytes, ocr_languages=ocr_languages
+            )
+            if total_pages > APPLEVISION_MAX_PAGES:
+                warnings.append(
+                    f"PDF has {total_pages} pages; only the first {APPLEVISION_MAX_PAGES} were OCR'd."
+                )
+            av_text = av_text.strip()
+            if av_text:
+                warnings.append("Apple Vision (on-device) OCR was used.")
+        except Exception as exc:
+            warnings.append(f"Apple Vision OCR failed: {exc}")
+
+        if av_text:
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=av_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-applevision",
+                preparation_warnings=warnings,
+            )
+
+        if native_text.strip():
+            warnings.append(
+                "Apple Vision produced no usable text, so native PDF text was used instead."
+            )
+            return PreparedReport(
+                report_name=report_name,
+                source_file_name=report_name,
+                report_text=native_text,
+                source_kind="pdf",
+                text_extraction_method="pdf-native",
+                preparation_warnings=warnings,
+            )
+
+        raise RuntimeError("No text could be extracted from this PDF (Apple Vision).")
 
     should_run_ocr = pdf_input_mode == "force_ocr"
     if pdf_input_mode == "auto_ocr_fallback":
@@ -618,7 +1102,7 @@ def prepare_pdf_report(
         )
         ocr_score, _ = assess_text_quality(ocr_text)
         if ocr_logs:
-            warnings.append("OCRmyPDF was run for this report.")
+            warnings.append("OCR (Tesseract/OCRmyPDF) text was used for this report.")
 
         if ocr_text.strip():
             if pdf_input_mode != "force_ocr" and native_text.strip() and ocr_score + 5 < native_score:
@@ -693,7 +1177,7 @@ def split_prepared_report(
     client,
     model: str,
     prepared_report: PreparedReport,
-    use_json_mode: bool,
+    json_mode: str,
     temperature: float,
     max_tokens: int,
 ) -> list[PreparedReport]:
@@ -729,7 +1213,7 @@ Source text:
 """.strip()
 
     try:
-        content = run_chat_json(
+        content, _finish = run_chat_json(
             backend=backend,
             client=client,
             model=model,
@@ -738,10 +1222,15 @@ Source text:
                 "Return JSON only."
             ),
             user=prompt,
-            use_json_mode=use_json_mode,
+            # The splitter has its own {"reports": [...]} shape, not the
+            # extraction schema, so it never gets schema-constrained output;
+            # with schema=None, "json_schema" degrades to "json_object".
+            json_mode=json_mode,
+            schema=None,
             temperature=temperature,
             max_tokens=max_tokens,
-        ) or "{}"
+        )
+        content = content or "{}"
         parsed = parse_json_response(content)
         candidate_reports = parsed.get("reports") if isinstance(parsed, dict) else None
         if not isinstance(candidate_reports, list):
@@ -803,31 +1292,92 @@ Source text:
         ]
 
 
-def extract_reports(
+MAX_OUTPUT_TOKENS_CEILING = 32000
+
+
+def _bump_temperature(temperature: float) -> float:
+    """Nudge a (possibly greedy) temperature up to break a repetition loop."""
+    return round(min((temperature if temperature > 0 else 0.0) + 0.2, 1.0), 2)
+
+
+def _candidate_size(parsed: dict | list) -> int:
+    """Field/element count of a parsed candidate, used to keep the fullest partial."""
+    if isinstance(parsed, (dict, list)):
+        return len(parsed)
+    return 0
+
+
+def _normalize_for_grounding(text: str) -> str:
+    # Collapse non-alphanumeric runs to single spaces (do NOT glue tokens, or a
+    # marker like "CD3" followed by "100%" would read as "cd3100").
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower())
+
+
+def _unverified_markers(parsed: dict | list, report_text: str) -> list[str]:
+    """CD-type `additional_markers` whose name is absent from the source text.
+
+    CD antigens are language-invariant, so a real one appears verbatim in the
+    text; a CD name that is NOT there was almost certainly invented — most often
+    an antibody clone NUMBER mistaken for a CD number (clone 124 -> "CD124").
+    Scoped to the `CD<number>` pattern to avoid false-flagging translated or
+    descriptive names (e.g. "Cyclin D1", "c-Myc") that legitimately differ from
+    the source text. The trailing guard stops "CD5" matching inside "CD56".
+    """
+    if not isinstance(parsed, dict):
+        return []
+    markers = parsed.get("additional_markers")
+    if not isinstance(markers, list):
+        return []
+    text_norm = _normalize_for_grounding(report_text)
+    unverified: list[str] = []
+    for entry in markers:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("marker")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        name_norm = _normalize_for_grounding(name).strip()
+        if not re.fullmatch(r"cd\d+\w*", name_norm):
+            continue  # only audit language-invariant CD markers
+        if not re.search(r"(?<![a-z0-9])" + re.escape(name_norm) + r"(?![0-9])", text_norm):
+            unverified.append(name.strip())
+    return unverified
+
+
+@st.cache_data(show_spinner=False)
+def cached_extract_outcome(
     *,
+    _client,
     backend: str,
-    client,
+    base_url: str,
     model: str,
     instructions: str,
-    schema: dict,
-    prepared_reports: list[PreparedReport],
-    use_json_mode: bool,
+    schema_json: str,
+    report_text: str,
+    source_file_name: str,
+    report_name: str,
+    json_mode: str,
     temperature: float,
     max_tokens: int,
-) -> list[ExtractionResult]:
-    results: list[ExtractionResult] = []
+    max_retries: int,
+) -> ExtractionOutcome:
+    """Extract one report, with retries, cached so reruns skip repeats.
 
-    for prepared_report in prepared_reports:
-        report_name = prepared_report.report_name
-        report_text = prepared_report.report_text
-        prompt = f"""
+    The cache key is every argument except `_client` (leading underscore ->
+    excluded by st.cache_data), so changing the endpoint/model/schema/
+    instructions/settings or the report text re-runs; an unchanged report on a
+    rerun returns instantly (batch resume). Raises on total failure so transient
+    failures are NOT cached — only usable outcomes are.
+    """
+    schema = json.loads(schema_json)
+    prompt = f"""
 Extract structured information from this pathology report.
 
 Return exactly one JSON object that follows this JSON Schema:
 {json.dumps(schema, indent=2, ensure_ascii=False)}
 
 Report/source filename:
-{prepared_report.source_file_name}
+{source_file_name}
 
 Report segment label:
 {report_name}
@@ -836,38 +1386,152 @@ Pathology report text:
 {report_text}
 """.strip()
 
+    attempt_temp = float(temperature)
+    attempt_max_tokens = int(max_tokens)
+    last_error: str | None = None
+    best: tuple[str, dict | list, list[str], bool] | None = None
+
+    for _attempt in range(max(max_retries, 0) + 1):
         try:
-            content = run_chat_json(
+            content, finish_reason = run_chat_json(
                 backend=backend,
-                client=client,
+                client=_client,
                 model=model,
                 system=instructions,
                 user=prompt,
-                use_json_mode=use_json_mode,
+                json_mode=json_mode,
+                schema=schema,
+                temperature=attempt_temp,
+                max_tokens=attempt_max_tokens,
+            )
+        except Exception as exc:
+            last_error = f"model call failed: {exc}"
+            attempt_temp = _bump_temperature(attempt_temp)
+            continue
+
+        if not content.strip():
+            last_error = "the model returned an empty response"
+            attempt_temp = _bump_temperature(attempt_temp)
+            if finish_reason == "length":
+                attempt_max_tokens = min(attempt_max_tokens * 2, MAX_OUTPUT_TOKENS_CEILING)
+            continue
+
+        try:
+            parsed = parse_json_response(content)
+        except Exception as exc:
+            last_error = f"could not parse JSON from the response: {exc}"
+            attempt_temp = _bump_temperature(attempt_temp)
+            if finish_reason == "length":
+                attempt_max_tokens = min(attempt_max_tokens * 2, MAX_OUTPUT_TOKENS_CEILING)
+            continue
+
+        validation_errors = validate_instance(parsed, schema)
+        truncated = finish_reason == "length"
+        if not truncated:
+            best = (content, parsed, validation_errors, truncated)
+            break
+        # Parsed but cut off mid-output: keep the MOST COMPLETE partial seen so
+        # far, then (if retries remain) retry with a bigger budget + temp nudge.
+        if best is None or _candidate_size(parsed) >= _candidate_size(best[1]):
+            best = (content, parsed, validation_errors, truncated)
+        last_error = "output was truncated at the token cap"
+        attempt_max_tokens = min(attempt_max_tokens * 2, MAX_OUTPUT_TOKENS_CEILING)
+        attempt_temp = _bump_temperature(attempt_temp)
+
+    if best is None:
+        raise RuntimeError(last_error or "extraction failed")
+
+    content, parsed, validation_errors, truncated = best
+    if truncated:
+        status_label = "truncated"
+    elif validation_errors:
+        status_label = "schema-warning"
+    else:
+        status_label = "valid"
+
+    # Deterministic grounding guard: a free-form marker whose name is absent from
+    # the source text was likely inferred/fabricated (e.g. a clone code turned into
+    # a bogus CD number). Flag for review and never let it claim high confidence.
+    ungrounded = _unverified_markers(parsed, report_text)
+    if ungrounded:
+        if status_label in ("valid", "schema-warning"):
+            status_label = "needs-review"
+        if isinstance(parsed, dict):
+            parsed["extraction_confidence"] = "low"
+            note = (
+                "auto-flagged: marker name(s) not found in the source text "
+                "(possibly inferred from a clone): " + ", ".join(ungrounded)
+            )
+            prior = parsed.get("extraction_confidence_reason")
+            parsed["extraction_confidence_reason"] = (
+                f"{prior} | {note}" if isinstance(prior, str) and prior.strip() else note
+            )
+
+    return ExtractionOutcome(
+        success=True,
+        status_label=status_label,
+        raw_response=content,
+        parsed_json=parsed,
+        validation_errors=validation_errors,
+        error_message=None,
+    )
+
+
+def extract_reports(
+    *,
+    backend: str,
+    client,
+    base_url: str,
+    model: str,
+    instructions: str,
+    schema: dict,
+    prepared_reports: list[PreparedReport],
+    json_mode: str,
+    temperature: float,
+    max_tokens: int,
+    max_retries: int = 0,
+) -> list[ExtractionResult]:
+    results: list[ExtractionResult] = []
+    # Order-preserving schema string used as part of the per-report cache key.
+    schema_json = json.dumps(schema, ensure_ascii=False)
+
+    for prepared_report in prepared_reports:
+        try:
+            outcome = cached_extract_outcome(
+                _client=client,
+                backend=backend,
+                base_url=base_url,
+                model=model,
+                instructions=instructions,
+                schema_json=schema_json,
+                report_text=prepared_report.report_text,
+                source_file_name=prepared_report.source_file_name,
+                report_name=prepared_report.report_name,
+                json_mode=json_mode,
                 temperature=temperature,
                 max_tokens=max_tokens,
-            ) or "{}"
-            parsed = parse_json_response(content)
-            validation_errors = validate_instance(parsed, schema)
+                max_retries=max_retries,
+            )
             results.append(
                 ExtractionResult(
-                    report_name=report_name,
+                    report_name=prepared_report.report_name,
                     source_file_name=prepared_report.source_file_name,
-                    success=True,
-                    status_label="valid" if not validation_errors else "schema-warning",
-                    raw_response=content,
-                    parsed_json=parsed,
-                    validation_errors=validation_errors,
+                    success=outcome.success,
+                    status_label=outcome.status_label,
+                    raw_response=outcome.raw_response,
+                    parsed_json=outcome.parsed_json,
+                    validation_errors=outcome.validation_errors,
                     source_kind=prepared_report.source_kind,
                     text_extraction_method=prepared_report.text_extraction_method,
                     preparation_warnings=prepared_report.preparation_warnings,
-                    prepared_text=report_text,
+                    prepared_text=prepared_report.report_text,
+                    error_message=outcome.error_message,
                 )
             )
         except Exception as exc:
             results.append(
                 ExtractionResult(
-                    report_name=report_name,
+                    report_name=prepared_report.report_name,
                     source_file_name=prepared_report.source_file_name,
                     success=False,
                     status_label="failed",
@@ -877,12 +1541,401 @@ Pathology report text:
                     source_kind=prepared_report.source_kind,
                     text_extraction_method=prepared_report.text_extraction_method,
                     preparation_warnings=prepared_report.preparation_warnings,
-                    prepared_text=report_text,
+                    prepared_text=prepared_report.report_text,
                     error_message=str(exc),
                 )
             )
 
     return results
+
+
+def is_local_endpoint(backend: str, base_url: str) -> bool:
+    """True only when requests stay on this machine (loopback OpenAI-compatible).
+
+    Anthropic and the blank/default OpenAI base URL are always remote.
+    """
+    if backend != "openai":
+        return False
+    url = (base_url or "").strip()
+    if not url:
+        return False  # blank -> OpenAI cloud default
+    host = (urlparse(url if "://" in url else "http://" + url).hostname or "").lower()
+    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"} or host.endswith(".local")
+
+
+def render_results(results: list[ExtractionResult], schema: dict) -> None:
+    st.subheader("Results")
+
+    succeeded = sum(1 for r in results if r.success)
+    warnings_n = sum(
+        1 for r in results if r.status_label in ("schema-warning", "truncated", "needs-review")
+    )
+    failed = sum(1 for r in results if not r.success)
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Reports", len(results))
+    metric_cols[1].metric("Succeeded", succeeded)  # Succeeded + Failed == Reports
+    metric_cols[2].metric("Warnings", warnings_n)
+    metric_cols[3].metric("Failed", failed)
+    st.caption("Showing the most recent extraction run.")
+
+    summary_rows = [
+        {
+            "report": result.report_name,
+            "source_file": result.source_file_name,
+            "source": result.source_kind,
+            "text_mode": result.text_extraction_method,
+            "status": result.status_label,
+            "confidence": (
+                result.parsed_json.get("extraction_confidence")
+                if isinstance(result.parsed_json, dict)
+                else None
+            ),
+            "validation_errors": len(result.validation_errors),
+        }
+        for result in results
+    ]
+    st.dataframe(summary_rows, use_container_width=True)
+
+    successful_csv_results = [
+        result for result in results if result.success and isinstance(result.parsed_json, dict)
+    ]
+    results_csv = build_results_csv(successful_csv_results, schema)
+    bundle = build_results_zip(results, results_csv=results_csv)
+
+    download_cols = st.columns(2)
+    if successful_csv_results:
+        download_cols[0].download_button(
+            "Download results (.csv)",
+            data=results_csv,
+            file_name="results.csv",
+            mime="text/csv",
+            key="download_results_csv",
+        )
+    else:
+        download_cols[0].warning("No CSV rows available.")
+    download_cols[1].download_button(
+        "Download results (.zip)",
+        data=bundle,
+        file_name="medical_report_information_extractor_results.zip",
+        mime="application/zip",
+        key="download_results_zip",
+    )
+
+    only_problems = st.checkbox(
+        "Show only problems (failed / warnings / truncated / needs-review / low confidence)",
+        value=False,
+        key="results_only_problems",
+    )
+
+    for result in results:
+        parsed_dict = result.parsed_json if isinstance(result.parsed_json, dict) else {}
+        is_problem = (
+            (not result.success)
+            or result.status_label in ("schema-warning", "truncated", "needs-review")
+            or parsed_dict.get("extraction_confidence") == "low"
+        )
+        if only_problems and not is_problem:
+            continue
+        with st.expander(result.report_name, expanded=is_problem):
+            st.write(f"Source filename: `{result.source_file_name}`")
+            st.write(f"Source kind: `{result.source_kind}`")
+            st.write(f"Text extraction method: `{result.text_extraction_method}`")
+            if result.preparation_warnings:
+                st.warning("\n".join(result.preparation_warnings))
+            if result.status_label == "truncated":
+                st.warning(
+                    "The model hit the output-token cap (possible repetition loop), so "
+                    "this result may be truncated. Try raising Max output tokens or Max "
+                    "retries, or nudging temperature up."
+                )
+            if result.status_label == "needs-review" or parsed_dict.get("extraction_confidence") == "low":
+                _reason = parsed_dict.get("extraction_confidence_reason")
+                st.warning(
+                    "⚠️ Low confidence / needs review — verify the marker names against the "
+                    "source text before trusting them. " + (_reason or "")
+                )
+            if result.error_message:
+                st.error(result.error_message)
+                continue
+            if result.validation_errors:
+                st.warning("Output parsed, but it does not fully match the schema.")
+                st.code("\n".join(result.validation_errors), language="text")
+            input_tab, json_tab, raw_tab = st.tabs(["Prepared text", "JSON", "Raw response"])
+            with input_tab:
+                st.code(result.prepared_text or "No prepared text captured.", language="text")
+            with json_tab:
+                st.json(result.parsed_json)
+            with raw_tab:
+                st.code(result.raw_response or "No raw response captured.", language="json")
+
+
+# ---------------------------------------------------------------------------
+# Lift engine (Datalab) — optional, self-contained, on-device PDF/image -> JSON.
+#
+# A separate tool from the text pipeline above. Instead of document -> text ->
+# LLM, it renders page images and runs the datalab-to/lift 9B vision model
+# in-process (HuggingFace). It is NOT model-agnostic: it only runs its own
+# model, not the local Ollama/LM Studio LLM the text pipeline can use. Selected
+# via the sidebar radio; when active it renders its own UI and st.stop()s, so
+# the text-pipeline code below is left completely untouched.
+# ---------------------------------------------------------------------------
+ENGINE_TEXT = "Text pipeline (LLM)"
+ENGINE_LIFT = "Lift — on-device PDF/image → JSON (Datalab)"
+
+# Schema keys lift's decoder ignores; used only for a soft "guarantee weakened"
+# warning (they don't stop extraction — the schema still runs).
+LIFT_UNSUPPORTED_SCHEMA_KEYS = ("enum", "anyOf", "oneOf", "$ref", "additionalProperties")
+
+
+@st.cache_resource(show_spinner="Loading the lift model (first run downloads ~18 GB from Hugging Face)…")
+def get_lift_hf_model(device: str):
+    """Load the datalab-to/lift 9B vision model in-process, once per session.
+
+    Cached on `device` so the weights load a single time and are reused across
+    reruns/files. `lift.settings.settings` is a singleton that lift's
+    `load_model()` reads at construction time, so the device is pinned on it here
+    (None -> device_map="auto"; "mps" -> Apple GPU; "cpu" -> slow fallback).
+    """
+    lift_settings.TORCH_DEVICE = device or None
+    lift_settings.MODEL_CHECKPOINT = "datalab-to/lift"
+    return LiftInferenceManager(method="hf")
+
+
+def build_lift_result(
+    out,
+    *,
+    report_name: str,
+    source_file_name: str,
+    source_kind: str,
+    schema: dict,
+    device: str,
+) -> ExtractionResult:
+    """Map a lift BatchOutputItem onto the app's shared ExtractionResult.
+
+    lift returns extraction=None when the model output did not parse as JSON (the
+    HF path is prompt-guided, not grammar-constrained, so that can happen). We
+    reuse the app's jsonschema validator for the same valid / schema-warning
+    labelling used by the text pipeline. The text pipeline's _unverified_markers
+    grounding guard is intentionally NOT applied: it compares marker names against
+    report text, which lift never produces.
+    """
+    parsed = out.extraction if isinstance(out.extraction, dict) else None
+    success = (not out.error) and parsed is not None
+    validation_errors = validate_instance(parsed, schema) if success else []
+    if not success:
+        status_label = "failed"
+    elif validation_errors:
+        status_label = "schema-warning"
+    else:
+        status_label = "valid"
+    return ExtractionResult(
+        report_name=report_name,
+        source_file_name=source_file_name,
+        success=success,
+        status_label=status_label,
+        raw_response=out.raw or "",
+        parsed_json=parsed,
+        validation_errors=validation_errors,
+        source_kind=source_kind,
+        text_extraction_method=f"lift-hf:{device}",
+        preparation_warnings=[],
+        prepared_text="(lift reads page images directly; no text stage)",
+        error_message=None if success else (out.raw or "lift returned an error / unparseable JSON"),
+    )
+
+
+def run_lift_engine() -> None:
+    """Render and run the self-contained on-device Lift extraction tool."""
+    if not LIFT_AVAILABLE:
+        st.info(
+            "The Lift engine needs the optional `lift` package. Install the on-device "
+            'backend with: `pip install "lift-pdf[hf]"` (pulls PyTorch / Transformers and, '
+            "on first run, downloads the ~18 GB `datalab-to/lift` model)."
+        )
+        return
+
+    with st.sidebar:
+        st.header("Lift engine (Datalab)")
+        st.success("Runs on-device — no report data leaves this Mac.")
+        device = st.selectbox(
+            "Device",
+            ["mps", "cpu"],
+            index=0,
+            help="mps = Apple GPU (fast). cpu = fallback if MPS/bfloat16 misbehaves (much slower).",
+        )
+        lift_max_output_tokens = st.number_input(
+            "Max output tokens",
+            min_value=256,
+            max_value=32000,
+            value=12384,
+            step=256,
+            help="Upper bound on generated tokens for the whole document.",
+        )
+        lift_page_range = st.text_input(
+            "Page range (optional)",
+            value="",
+            help='Limit PDF pages, e.g. "0-5,7". Blank = all pages.',
+        )
+        st.caption(
+            "First run downloads the ~18 GB `datalab-to/lift` model. If it is gated, accept the "
+            "license at https://huggingface.co/datalab-to/lift and run `huggingface-cli login`."
+        )
+
+    config_col, report_col = st.columns([1, 1])
+
+    with config_col:
+        st.subheader("Configuration")
+        # Schema presets from config/, with lift's OWN session keys so the two
+        # engines never overwrite each other's edited schema text.
+        schema_choices = {path.name: path for path in sorted(CONFIG_DIR.glob("*.json"))}
+        schema_names = list(schema_choices.keys()) or ["schema_lift.json"]
+        default_name = (
+            "schema_lift.json" if "schema_lift.json" in schema_names else schema_names[0]
+        )
+        selected_schema_name = st.selectbox(
+            "Schema preset",
+            schema_names,
+            index=schema_names.index(default_name),
+            help=(
+                "Lift works best with a flat schema (no enum / unions / additionalProperties). "
+                "schema_lift.json is a ready-made example."
+            ),
+        )
+        if st.session_state.get("_lift_schema_preset") != selected_schema_name:
+            st.session_state["lift_schema_text"] = json.dumps(
+                load_json(schema_choices[selected_schema_name]), indent=2, ensure_ascii=False
+            )
+            st.session_state["_lift_schema_preset"] = selected_schema_name
+
+        schema_file = st.file_uploader(
+            "JSON Schema file (.json) — overrides the preset",
+            type=["json"],
+            key="lift_schema_upload",
+        )
+        if schema_file is not None:
+            upload_id = f"{schema_file.name}:{schema_file.size}"
+            if st.session_state.get("_lift_schema_upload") != upload_id:
+                st.session_state["lift_schema_text"] = schema_file.getvalue().decode(
+                    "utf-8", errors="replace"
+                )
+                st.session_state["_lift_schema_upload"] = upload_id
+
+        schema_text = st.text_area("JSON Schema", key="lift_schema_text", height=320)
+
+        lift_schema_obj = None
+        try:
+            lift_schema_obj = lift_resolve_schema(json.loads(schema_text))
+        except json.JSONDecodeError as exc:
+            st.error(f"Schema is not valid JSON: {exc}")
+        except Exception as exc:
+            st.error(f"Lift can't use this schema: {exc}")
+        if any(key in (schema_text or "") for key in LIFT_UNSUPPORTED_SCHEMA_KEYS):
+            st.warning(
+                "This schema uses enum / anyOf / oneOf / $ref / additionalProperties, which lift's "
+                "decoder ignores — the per-field guarantee is weakened. Prefer a flat schema like "
+                "schema_lift.json."
+            )
+
+    with report_col:
+        st.subheader("Reports")
+        dep_cols = st.columns(2)
+        dep_cols[0].metric("lift", "Found" if LIFT_AVAILABLE else "Missing")
+        dep_cols[1].metric("Device", device)
+        uploaded_pdfs = st.file_uploader(
+            "Upload PDF report files (.pdf)",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="lift_pdfs",
+        )
+        uploaded_images = st.file_uploader(
+            "Upload image report files (.png/.jpg/.jpeg)",
+            type=["png", "jpg", "jpeg"],
+            accept_multiple_files=True,
+            key="lift_images",
+        )
+        st.info(
+            "Lift sends rendered page images straight to the datalab-to/lift vision model and "
+            "returns JSON matching your schema in a single pass. It does not use your local LLM."
+        )
+
+    run_lift = st.button("Extract with lift (on-device)", type="primary")
+
+    if run_lift:
+        uploads = [(f, "pdf") for f in (uploaded_pdfs or [])] + [
+            (f, "image") for f in (uploaded_images or [])
+        ]
+        if lift_schema_obj is None:
+            st.error("Fix the JSON Schema above before extracting.")
+            st.stop()
+        if not uploads:
+            st.error("Upload at least one PDF or image.")
+            st.stop()
+
+        try:
+            model = get_lift_hf_model(device)
+        except ImportError:
+            st.error('Install the on-device backend: pip install "lift-pdf[hf]"')
+            st.stop()
+        except Exception as exc:
+            st.error(
+                f"Could not load the lift model: {exc}\n\n"
+                "If the model is gated, accept its license at "
+                "https://huggingface.co/datalab-to/lift and run `huggingface-cli login`. "
+                "If this looks like an MPS/bfloat16 error, switch Device to cpu."
+            )
+            st.stop()
+
+        progress = st.progress(0.0)
+        status = st.empty()
+        results: list[ExtractionResult] = []
+        for index, (uploaded, source_kind) in enumerate(uploads, start=1):
+            status.write(f"Extracting {uploaded.name} ({index}/{len(uploads)})")
+            try:
+                with tempfile.TemporaryDirectory(prefix="mrie_lift_") as temp_dir:
+                    file_path = Path(temp_dir) / uploaded.name
+                    file_path.write_bytes(uploaded.getvalue())
+                    out = lift_extract(
+                        str(file_path),
+                        lift_schema_obj,
+                        model=model,
+                        page_range=(lift_page_range.strip() or None),
+                        max_output_tokens=int(lift_max_output_tokens),
+                    )
+                results.append(
+                    build_lift_result(
+                        out,
+                        report_name=uploaded.name,
+                        source_file_name=uploaded.name,
+                        source_kind=source_kind,
+                        schema=lift_schema_obj,
+                        device=device,
+                    )
+                )
+            except Exception as exc:
+                results.append(
+                    ExtractionResult(
+                        report_name=uploaded.name,
+                        source_file_name=uploaded.name,
+                        success=False,
+                        status_label="failed",
+                        raw_response="",
+                        parsed_json=None,
+                        validation_errors=[],
+                        source_kind=source_kind,
+                        text_extraction_method=f"lift-hf:{device}",
+                        preparation_warnings=[],
+                        prepared_text="",
+                        error_message=str(exc),
+                    )
+                )
+            progress.progress(index / len(uploads))
+        progress.empty()
+        status.empty()
+        st.session_state["lift_last_run"] = {"results": results, "schema": lift_schema_obj}
+
+    if st.session_state.get("lift_last_run"):
+        last_run = st.session_state["lift_last_run"]
+        render_results(last_run["results"], last_run["schema"])
 
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -896,6 +1949,21 @@ st.caption(
     "This app accepts plaintext reports or PDFs. Word-generated PDFs can use native "
     "text extraction, while scanned PDFs can use OCR. De-identification is still outside this project."
 )
+
+# Extraction engine selector. Selecting Lift runs a self-contained on-device tool
+# and st.stop()s, so the text-pipeline UI below never renders for it.
+engine = st.sidebar.radio(
+    "Extraction engine",
+    [ENGINE_TEXT, ENGINE_LIFT],
+    help=(
+        "Text pipeline: OCR / vision → text → your chosen LLM (OpenAI, Claude, local "
+        "Ollama/LM Studio) with a JSON Schema. Lift: rendered page images straight into "
+        "the datalab-to/lift 9B vision model, on-device (its own model, not your local LLM)."
+    ),
+)
+if engine == ENGINE_LIFT:
+    run_lift_engine()
+    st.stop()
 
 default_instructions = load_text(CONFIG_DIR / "instructions.txt")
 default_schema = load_json(CONFIG_DIR / "schema.json")
@@ -945,6 +2013,25 @@ with st.sidebar:
     if backend == "anthropic" and not ANTHROPIC_AVAILABLE:
         st.warning("Install the Anthropic SDK to use Claude: `pip install anthropic`")
 
+    remote_endpoint = not is_local_endpoint(backend, base_url)
+    allow_phi_egress = True
+    if remote_endpoint:
+        # Bind consent to this specific endpoint: if the provider/base URL changes,
+        # reset consent so PHI can't reach a new endpoint on a stale checkbox.
+        endpoint_id = f"{provider_name}|{base_url.strip()}"
+        if st.session_state.get("_phi_consent_endpoint") != endpoint_id:
+            st.session_state["_phi_consent_endpoint"] = endpoint_id
+            st.session_state["allow_phi_egress"] = False
+        st.warning(
+            "⚠️ This endpoint is **remote** — report text (and, in vision modes, page "
+            "images) containing identifiable PHI will be sent off-device. This app does "
+            "no de-identification."
+        )
+        allow_phi_egress = st.checkbox(
+            "I understand and consent to sending PHI to this remote endpoint",
+            key="allow_phi_egress",
+        )
+
     if st.button("Fetch models"):
         if preset["needs_key"] and not api_key.strip():
             st.error("API key is required to fetch models for this provider.")
@@ -976,17 +2063,67 @@ with st.sidebar:
             step=256,
             help="Anthropic requires an output token cap. Raise it for very long reports.",
         )
-        use_json_mode = False
+        json_mode = "off"
         temperature = 0.0
         st.caption("Temperature and JSON mode do not apply to the Anthropic backend.")
     else:
-        use_json_mode = st.checkbox(
-            "Use JSON mode",
-            value=True,
-            help="Disable this if your OpenAI-compatible server does not support `response_format=json_object`.",
+        json_mode = st.selectbox(
+            "JSON output mode",
+            ["json_schema", "json_object", "off"],
+            index=0,
+            format_func=lambda mode: {
+                "json_schema": "Schema-constrained (forces every required field)",
+                "json_object": "JSON object (valid JSON only, schema not enforced)",
+                "off": "Off (no constraint)",
+            }[mode],
+            help=(
+                "Schema-constrained sends your JSON Schema as "
+                "`response_format=json_schema`, so the server grammar-constrains the "
+                "model to emit every required field. This is what makes a local MLX "
+                "model (e.g. in LM Studio) match the GGUF/Ollama result instead of "
+                "dropping fields. It falls back to `json_object` automatically if the "
+                "server does not support it. Use `json_object` or `off` for older servers."
+            ),
         )
-        temperature = st.slider("Temperature", min_value=0.0, max_value=1.0, value=0.0, step=0.1)
-        anthropic_max_tokens = 8000
+        temperature = st.slider(
+            "Temperature",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.0,
+            step=0.1,
+            help=(
+                "0.0 is greedy decoding — most reproducible, but under schema-constrained "
+                "output some local models fall into a repetition loop and run to the token "
+                "cap. If a model loops, raise this to 0.1–0.2 to break the loop with minimal "
+                "loss of determinism."
+            ),
+        )
+        anthropic_max_tokens = st.number_input(
+            "Max output tokens",
+            min_value=256,
+            max_value=32000,
+            value=8000,
+            step=256,
+            help=(
+                "Hard cap on generated tokens so a runaway/repetition loop fails fast "
+                "instead of filling the context window. Truncated output is repaired "
+                "best-effort, so fields generated before the cut are still recovered. "
+                "Raise it for very long reports."
+            ),
+        )
+
+    max_retries = st.number_input(
+        "Max retries on failure / truncation",
+        min_value=0,
+        max_value=3,
+        value=1,
+        step=1,
+        help=(
+            "If extraction fails, returns empty, or is cut off at the token cap, retry "
+            "this many times with a nudged temperature and a doubled token budget. Helps "
+            "with loop-prone local models."
+        ),
+    )
 
     split_multi_report_files = st.checkbox(
         "Split files with multiple reports",
@@ -1005,28 +2142,64 @@ with st.sidebar:
         ),
     )
     st.header("PDF Input")
+    pdf_mode_labels = {
+        "auto_ocr_fallback": "Auto: native text, OCR if short or low quality",
+        "native": "Native text only",
+        "force_ocr": "Force OCR on all PDFs",
+        "auto_vision_fallback": "Auto: native text, vision model if short or low quality",
+        "force_vision": "Force vision model on all PDFs",
+    }
+    pdf_mode_options = [
+        "auto_ocr_fallback",
+        "native",
+        "force_ocr",
+        "auto_vision_fallback",
+        "force_vision",
+    ]
+    if OCRMAC_AVAILABLE:
+        pdf_mode_labels["auto_applevision_fallback"] = (
+            "Auto: native text, Apple Vision OCR if short or low quality"
+        )
+        pdf_mode_labels["force_applevision"] = "Force Apple Vision OCR (on-device, macOS)"
+        # On-device Apple Vision sits right after the Tesseract OCR options.
+        pdf_mode_options[3:3] = ["auto_applevision_fallback", "force_applevision"]
     pdf_input_mode = st.selectbox(
         "PDF text preparation",
-        ["auto_ocr_fallback", "native", "force_ocr"],
+        pdf_mode_options,
         index=0,
-        format_func=lambda value: {
-            "auto_ocr_fallback": "Auto: native text, OCR if short or low quality",
-            "native": "Native text only",
-            "force_ocr": "Force OCR on all PDFs",
-        }[value],
+        format_func=lambda value: pdf_mode_labels[value],
+        help=(
+            "OCR options use Tesseract/OCRmyPDF. Apple Vision (if available) is on-device "
+            "macOS OCR. The vision options render each page to an image and ask a vision "
+            "model (set below) to transcribe it. Either way the resulting text runs "
+            "through the normal schema-constrained extraction."
+        ),
     )
     ocr_languages = st.text_input(
         "OCR language(s)",
         value="eng",
-        help="Tesseract language codes joined with `+`, for example `eng+spa+por`.",
+        help=(
+            "Tesseract codes joined with `+` (e.g. `eng+spa+por`). For Apple Vision these "
+            "map to BCP-47 (eng→en-US, ukr→uk-UA, spa→es-ES, por→pt-PT)."
+        ),
     )
     native_text_min_chars = st.number_input(
-        "Min native PDF chars before OCR",
+        "Min native PDF chars before OCR / vision",
         min_value=0,
         max_value=10000,
         value=80,
         step=20,
-        help="In auto mode, PDFs below this native-text threshold or with poor native layout are sent through OCR.",
+        help="In an auto mode, PDFs below this native-text threshold or with poor native layout are sent through OCR or the vision model.",
+    )
+    vision_model = st.text_input(
+        "Vision model (for the vision PDF modes)",
+        value="",
+        help=(
+            "Model used by the vision PDF modes above. Leave blank to reuse the main "
+            "model. Point it at a vision-capable model served by your endpoint (e.g. a "
+            "Qwen2.5-VL / Llama-Vision model in LM Studio or Ollama, or a Claude / "
+            "GPT-4o model). The model must accept image input."
+        ),
     )
 
 config_col, report_col = st.columns([1, 1])
@@ -1051,6 +2224,7 @@ with config_col:
         "schema.json": "Full — all dedicated marker fields (schema.json)",
         "schema_fast.json": "Fast / free-form — metadata + all-markers catch-all (schema_fast.json)",
         "schema_ukr.json": "Ukrainian — full (schema_ukr.json)",
+        "schema_lift.json": "Lift-friendly — flat metadata + markers list (schema_lift.json)",
     }
     schema_names = list(schema_choices.keys()) or ["schema.json"]
     default_schema_index = (
@@ -1078,9 +2252,15 @@ with config_col:
         "JSON Schema file (.json) — overrides the preset", type=["json"]
     )
     if schema_file is not None:
-        st.session_state["schema_text"] = schema_file.getvalue().decode(
-            "utf-8", errors="replace"
-        )
+        # Only load the uploaded file when it actually changes (mirroring the
+        # preset path); otherwise it would overwrite the user's manual edits on
+        # every rerun, since the uploader keeps returning the same object.
+        upload_id = f"{schema_file.name}:{schema_file.size}"
+        if st.session_state.get("_schema_upload_loaded") != upload_id:
+            st.session_state["schema_text"] = schema_file.getvalue().decode(
+                "utf-8", errors="replace"
+            )
+            st.session_state["_schema_upload_loaded"] = upload_id
 
     schema_text = st.text_area(
         "JSON Schema",
@@ -1094,10 +2274,11 @@ with report_col:
     ocrmypdf_path = shutil.which("ocrmypdf")
     tesseract_path = shutil.which("tesseract")
 
-    dep_cols = st.columns(3)
+    dep_cols = st.columns(4)
     dep_cols[0].metric("PyMuPDF", "Found" if pymupdf_available else "Missing")
     dep_cols[1].metric("ocrmypdf", "Found" if ocrmypdf_path else "Missing")
     dep_cols[2].metric("tesseract", "Found" if tesseract_path else "Missing")
+    dep_cols[3].metric("Apple Vision", "Found" if OCRMAC_AVAILABLE else "Missing")
 
     pasted_report = st.text_area(
         "Paste one plaintext pathology report",
@@ -1135,6 +2316,13 @@ if run_extraction:
         st.stop()
     if backend == "anthropic" and not ANTHROPIC_AVAILABLE:
         st.error("The `anthropic` package is not installed. Run `pip install anthropic`.")
+        st.stop()
+
+    if remote_endpoint and not allow_phi_egress:
+        st.error(
+            "This endpoint is remote and PHI egress isn't confirmed. Tick the consent "
+            "checkbox in the sidebar, or switch to a local endpoint."
+        )
         st.stop()
 
     try:
@@ -1176,6 +2364,23 @@ if run_extraction:
                 preparation_warnings=[],
             )
         )
+    def transcribe_pdf_images(page_images: list[bytes]) -> str:
+        # Transcribe page by page so per-call image tokens stay bounded and the
+        # output keeps the "[Page N]" convention used elsewhere in the pipeline.
+        transcribed: list[str] = []
+        for page_number, page_image in enumerate(page_images, start=1):
+            page_text = run_vision_transcription(
+                backend=backend,
+                client=llm_client,
+                model=(vision_model.strip() or model),
+                image_png=page_image,
+                temperature=float(temperature),
+                max_tokens=int(anthropic_max_tokens),
+            ).strip()
+            if page_text:
+                transcribed.append(f"[Page {page_number}]\n{page_text}")
+        return "\n\n".join(transcribed).strip()
+
     for uploaded_pdf in uploaded_pdf_reports or []:
         try:
             prepared_reports.append(
@@ -1186,6 +2391,7 @@ if run_extraction:
                     native_text_min_chars=int(native_text_min_chars),
                     ocr_languages=ocr_languages,
                     ocrmypdf_path=ocrmypdf_path,
+                    transcribe_images=transcribe_pdf_images,
                 )
             )
         except Exception as exc:
@@ -1217,7 +2423,7 @@ if run_extraction:
                     client=llm_client,
                     model=model,
                     prepared_report=prepared_report,
-                    use_json_mode=use_json_mode,
+                    json_mode=json_mode,
                     temperature=float(temperature),
                     max_tokens=16000,
                 )
@@ -1226,7 +2432,6 @@ if run_extraction:
             expanded_reports.append(prepared_report)
         progress.progress(index / max(len(prepared_reports), 1))
 
-    marker_keywords = ihc_marker_keywords(schema_obj)
     results: list[ExtractionResult] = []
     for index, prepared_report in enumerate(expanded_reports, start=1):
         status.write(f"Extracting {prepared_report.report_name} ({index}/{len(expanded_reports)})")
@@ -1256,24 +2461,21 @@ if run_extraction:
             status.write(
                 f"Screening {prepared_report.report_name} ({index}/{len(expanded_reports)})"
             )
-            if not has_ihc_signal(prepared_report.report_text, marker_keywords):
-                # Keyword backstop: no immunohistochemistry marker or term appears
-                # anywhere in the text, so skip immediately without spending an
-                # LLM triage call.
-                triage_label = "not_report"
-            else:
-                try:
-                    triage_label = triage_document(
-                        backend=backend,
-                        client=llm_client,
-                        model=model,
-                        report_text=prepared_report.report_text,
-                        temperature=float(temperature),
-                    )
-                except Exception:
-                    # If the screen fails, fall through to a full extraction rather
-                    # than risk dropping a real report.
-                    triage_label = "pathology"
+            try:
+                # Always run the cheap LLM triage. The old keyword backstop saved
+                # a call but could silently drop real reports whose marker names it
+                # didn't recognise; correctness wins over one tiny classification.
+                triage_label = triage_document(
+                    backend=backend,
+                    client=llm_client,
+                    model=model,
+                    report_text=prepared_report.report_text,
+                    temperature=float(temperature),
+                )
+            except Exception:
+                # If the screen fails, fall through to a full extraction rather
+                # than risk dropping a real report.
+                triage_label = "pathology"
             if triage_label != "pathology":
                 results.append(
                     ExtractionResult(
@@ -1302,13 +2504,15 @@ if run_extraction:
         single_result = extract_reports(
             backend=backend,
             client=llm_client,
+            base_url=base_url,
             model=model,
             instructions=instructions_text,
             schema=schema_obj,
             prepared_reports=[prepared_report],
-            use_json_mode=use_json_mode,
+            json_mode=json_mode,
             temperature=float(temperature),
             max_tokens=int(anthropic_max_tokens),
+            max_retries=int(max_retries),
         )[0]
         results.append(single_result)
         progress.progress(index / max(len(expanded_reports), 1))
@@ -1316,62 +2520,12 @@ if run_extraction:
     progress.empty()
     status.empty()
 
-    st.subheader("Results")
-    summary_rows = [
-        {
-            "report": result.report_name,
-            "source_file": result.source_file_name,
-            "source": result.source_kind,
-            "text_mode": result.text_extraction_method,
-            "status": result.status_label,
-            "validation_errors": len(result.validation_errors),
-        }
-        for result in results
-    ]
-    st.dataframe(summary_rows, use_container_width=True)
+    # Persist results so downloads/widgets (which rerun the script with
+    # run_extraction=False) don't wipe the Results panel. Rendering happens below,
+    # outside the run guard, from session_state.
+    st.session_state["last_run"] = {"results": results, "schema": schema_obj}
 
-    successful_csv_results = [
-        result for result in results if result.success and isinstance(result.parsed_json, dict)
-    ]
-    results_csv = build_results_csv(successful_csv_results, schema_obj)
-    bundle = build_results_zip(results, results_csv=results_csv)
 
-    if successful_csv_results:
-        st.download_button(
-            "Download results (.csv)",
-            data=results_csv,
-            file_name="results.csv",
-            mime="text/csv",
-        )
-    else:
-        st.warning("No successful structured rows were available for CSV export.")
-
-    st.download_button(
-        "Download results (.zip)",
-        data=bundle,
-        file_name="medical_report_information_extractor_results.zip",
-        mime="application/zip",
-    )
-
-    for result in results:
-        with st.expander(result.report_name, expanded=not result.success):
-            st.write(f"Source filename: `{result.source_file_name}`")
-            st.write(f"Source kind: `{result.source_kind}`")
-            st.write(f"Text extraction method: `{result.text_extraction_method}`")
-            if result.preparation_warnings:
-                st.warning("\n".join(result.preparation_warnings))
-            if result.error_message:
-                st.error(result.error_message)
-                continue
-
-            if result.validation_errors:
-                st.warning("Output parsed, but it does not fully match the schema.")
-                st.code("\n".join(result.validation_errors), language="text")
-
-            input_tab, json_tab, raw_tab = st.tabs(["Prepared text", "JSON", "Raw response"])
-            with input_tab:
-                st.code(result.prepared_text or "No prepared text captured.", language="text")
-            with json_tab:
-                st.json(result.parsed_json)
-            with raw_tab:
-                st.code(result.raw_response or "No raw response captured.", language="json")
+if st.session_state.get("last_run"):
+    _last_run = st.session_state["last_run"]
+    render_results(_last_run["results"], _last_run["schema"])

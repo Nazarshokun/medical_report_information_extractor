@@ -16,172 +16,172 @@
     "ALK or CD246 or ALK protein": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "Annexin A1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "BCL2": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "BCL6": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "Beta F1 (alpha beta TCR)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "BOB1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CCND1 (Cyclin D1)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CCR4": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CCR7": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD1a": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD2": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD3 (surface and cytoplasmic/epsilon)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD4": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD5": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD7": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD8": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD10": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD11b": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD13": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD15": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD16": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD19": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD20": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD22": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD23": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD24": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD25": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD26": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD30": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD33": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD34": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD38": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD43": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD45": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD45RA / CD45RO": {
       "type": ["integer", "null"],
@@ -191,87 +191,87 @@
     "CD52": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD56 (NCAM)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD57": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD65": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD75": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD79a": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD79b": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD99": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD103": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD117 (KIT)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD138": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD200": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CD279 (PD1)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CLA (Cutaneous lymphocyte antigen)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CXCL13": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CXCR4": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "CXCR5": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "EBER / LMP1 / EBNA1 / EBNA2 (EBV)": {
       "type": ["integer", "null"],
@@ -281,52 +281,52 @@
     "EMA": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "FMC7": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "FOXP1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "FOXP3": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "GATA3": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "GCET1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "Granzyme B": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "Granzyme M": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "HGAL": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "HHV8 (LANA1)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "HLA-A / HLA-B / HLA-C / HLA-DR": {
       "type": ["integer", "null"],
@@ -336,12 +336,12 @@
     "HTLV-1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "ICOS": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "Immunoglobulins (IgM, IgD, IgG, IgA, kappa light chains, lambda light chains)": {
       "type": ["integer", "null"],
@@ -351,112 +351,112 @@
     "IRF4/MUM1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "J chain": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "LMO2": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "MAF (c-MAF)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "MATK (Megakaryocyte-associated tyrosine kinase)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "C-MYC or MYC": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "MYD88": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "OCT2": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "PAX5": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "Perforin": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "PRDM1 (BLIMP1)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "LEF1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done. important marker"
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось). important marker"
     },
     "PU1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "SAP": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "SOX11": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "TBX21 (T-BET)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "TCL1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "TCR gamma / TCR delta": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "TdT (Terminal deoxynucleotidyl transferase)": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "TIA1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "XBP1": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
     "ZAP70": {
       "type": ["integer", "null"],
       "enum": [0, 1, 2, null],
-      "description": "1 is positive, 0 is negative, 2 is not done."
+      "description": "1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
     },
 
     "record_id": {
@@ -489,27 +489,38 @@
     },
     "text_from_report": {
       "type": ["string", "null"],
+      "maxLength": 12000,
       "description": "Extract all microscopy and immunohistochemistry text from the report and output it in English. The report may be in any language; translate it into English."
+    },
+    "extraction_confidence": {
+      "type": ["string", "null"],
+      "enum": ["high", "medium", "low", null],
+      "description": "Overall confidence that the coded marker results are correct and complete: 'high' = text clear and results explicit; 'medium' = some ambiguity; 'low' = text garbled/OCR-poor or results unclear. Judge legibility and result clarity, not the diagnosis."
+    },
+    "extraction_confidence_reason": {
+      "type": ["string", "null"],
+      "description": "One short sentence on what made the markers easy or hard to determine (e.g. clear text, OCR garbling, ambiguous or missing results)."
     },
     "Grade_follicular_lymphoma": {
       "type": ["integer", "null"],
       "enum": [1, 2, 3, 4, null],
-      "description": "1 is Grade 1/I, 2 is Grade 2/II, 3 is Grade 3A/IIIA, 4 is Gread 3B/IIIB, only for follicular lymphoma"
+      "description": "1 is Grade 1/I, 2 is Grade 2/II, 3 is Grade 3A/IIIA, 4 is Grade 3B/IIIB, only for follicular lymphoma"
     },
     "additional_markers": {
       "type": ["array", "null"],
+      "maxItems": 100,
       "description": "Catch-all for ANY immunohistochemistry or flow-cytometry marker reported that does NOT already have its own dedicated field above. Add one entry per such marker. Do NOT include markers that already have a dedicated field. Use null or an empty array if there are none.",
       "items": {
         "type": "object",
         "properties": {
           "marker": {
             "type": "string",
-            "description": "Marker name exactly as written in the report (e.g. CD20, PAX5, MUM1, BCL2)."
+            "description": "Standardized marker/antigen name in English (the antigen the antibody detects), e.g. CD20, PAX5, Ki-67, Cyclin D1, TdT, c-Myc, BCL2, MUM1. Do NOT use the vendor, catalog code, or antibody clone as the name (e.g. DAKO, polyclonal, clone L26 / Ber-H2 / MIB-1 / EP12 / EP266). If only a clone/vendor code is given and the antigen is NOT named, do not guess a CD/antigen number — a clone code is not a CD number (clone 124 is not CD124); keep the verbatim clone text as the marker name. Only convert textbook-certain clones (L26 -> CD20, MIB-1 -> Ki-67, Ber-H2 -> CD30), and prefer antigen names stated in the microscopy narrative. Translate non-English names to standard nomenclature (e.g. Кі-67 -> Ki-67, Циклін D1 -> Cyclin D1). Put the original written text (vendor / clone / percentage) in raw_text."
           },
           "value": {
             "type": ["integer", "null"],
             "enum": [0, 1, 2, null],
-            "description": "Same coding as the dedicated markers: 1 is positive, 0 is negative, 2 is not done."
+            "description": "Same coding as the dedicated markers: 1 is positive (позитивний), 0 is negative (негативний), 2 is not done (не проводилось)."
           },
           "raw_text": {
             "type": ["string", "null"],
@@ -621,6 +632,9 @@
     "diagnosis",
     "ki67_percent",
     "text_from_report",
-    "additional_markers"
+    "additional_markers",
+    "Grade_follicular_lymphoma",
+    "extraction_confidence",
+    "extraction_confidence_reason"
   ]
 }
