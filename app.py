@@ -45,7 +45,9 @@ CONFIG_DIR = Path(__file__).resolve().parent / "config"
 # On-device Surya OCR (datalab-to/surya, Apache-2.0), in-process. Its 650M model is
 # served by llama.cpp/Metal (~3 GB), loaded once and kept warm across reruns/files
 # via @st.cache_resource. Needs the `llama-server` binary (brew install llama.cpp);
-# surya imports torch for its small text-detection model.
+# surya imports torch for its small text-detection model. It runs 8 parallel
+# llama.cpp slots by default (~14 GB KV cache); OCR is batched below so all 8 are
+# actually used. Export SURYA_INFERENCE_PARALLEL=<n> to trade slots for memory.
 try:
     from surya.inference import SuryaInferenceManager
     from surya.recognition import RecognitionPredictor
@@ -946,18 +948,22 @@ def _surya_page_text(prediction) -> str:
 def run_surya_ocr(pdf_bytes: bytes) -> str:
     """OCR a PDF in-process with the on-device Surya model, returning "[Page N]" text.
 
-    Pages are rendered with the shared fitz helper and recognized one at a time on the
-    warm, cached model (llama.cpp/Metal, ~3 GB). Raises on failure so the caller can
-    fall back to native text.
+    All of a file's pages are sent to the recognizer in ONE call, so llama.cpp fans
+    them across its parallel slots (SURYA_INFERENCE_PARALLEL) instead of OCR-ing one
+    page at a time — the key throughput win. Raises on failure so the caller can fall
+    back to native text.
     """
     from PIL import Image
 
     recognizer = get_surya_recognizer()
     page_images, _total = render_pdf_to_images(pdf_bytes, dpi=150, max_pages=50)
+    images = [Image.open(io.BytesIO(png)).convert("RGB") for png in page_images]
+    if not images:
+        return ""
+
+    predictions = recognizer(images)  # batched -> processed across the slots in parallel
     parts: list[str] = []
-    for page_number, png in enumerate(page_images, start=1):
-        image = Image.open(io.BytesIO(png)).convert("RGB")
-        prediction = recognizer([image])[0]
+    for page_number, prediction in enumerate(predictions, start=1):
         text = _surya_page_text(prediction)
         if text:
             parts.append(f"[Page {page_number}]\n{text}")

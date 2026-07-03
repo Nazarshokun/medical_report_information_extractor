@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "final_diagnosis": {
+      "type": "string",
+      "description": "Final pathologic diagnosis"
+    },
+    "record_id": {
+      "type": "string",
+      "description": "extract record id from source name file it could be TCP239 you have to extract TCP and number, or it could be TCPLA numbers or 38-123 or just numbers"
+    },
+    "ebv_marker": {
+      "type": "string",
+      "description": "extract information ebv marker in immunohistochemistrhy it could be named LMP1 (Latent Membrane Protein 1), EBNA1 / EBNA2 (Epstein-Barr Nuclear Antigen), BZLF1 / ZEBRA (Zta) — lytic phase marker, BMRF1 (EA-D) — early antigen lytic, VCA (Viral Capsid Antigen) or  LMP1, LMP2A, EBNA1, EBNA2, BZLF1/ZEBRA/Zta, BMRF1/EA-D, VCA, EBER-ISH (EBER1/EBER2)",
+      "enum": [
+        "negative",
+        "positive",
+        "not done"
+      ]
+    }
+  },
+  "required": [
+    "final_diagnosis",
+    "record_id",
+    "ebv_marker"
+  ]
+}
