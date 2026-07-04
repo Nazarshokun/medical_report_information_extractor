@@ -24,6 +24,10 @@ env/
 *.key
 secrets.*
 
+# Local runtime metrics (written by the app for app_usage.sh)
+.llm_usage.json
+.ocr_usage.json
+
 # Data / uploads (avoid committing any medical reports or PHI)
 *.pdf
 *.csv

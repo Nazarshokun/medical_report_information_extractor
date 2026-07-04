@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,6 +20,10 @@ import fitz
 import streamlit as st
 from jsonschema import Draft202012Validator
 from openai import BadRequestError, OpenAI, UnprocessableEntityError
+
+# ExtractionOutcome lives in its own module so @st.cache_data can pickle it reliably
+# (a class defined in the re-executed main script fails under the multipage app).
+from extraction_types import ExtractionOutcome
 
 try:
     # Optional: only needed for the Anthropic (Claude) backend. The app still
@@ -103,7 +108,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
     "Local — LM Studio": {
         "backend": "openai",
         "base_url": "http://localhost:1234/v1",
-        "default_model": "local-model",
+        "default_model": "google/gemma-4-e4b",
         "needs_key": False,
     },
     "Custom (OpenAI-compatible)": {
@@ -138,22 +143,6 @@ class ExtractionResult:
     text_extraction_method: str
     preparation_warnings: list[str]
     prepared_text: str
-    error_message: str | None = None
-
-
-@dataclass
-class ExtractionOutcome:
-    """Extraction result for one report, without per-file metadata.
-
-    Cached on (report text + all model/schema/prompt settings); metadata such as
-    report_name / source_kind / preparation_warnings is attached afterwards.
-    """
-
-    success: bool
-    status_label: str
-    raw_response: str
-    parsed_json: dict | list | None
-    validation_errors: list[str]
     error_message: str | None = None
 
 
@@ -425,6 +414,83 @@ def fetch_models(client) -> list[str]:
     return sorted(model.id for model in client.models.list().data)
 
 
+LLM_USAGE_FILE = Path(__file__).resolve().parent / ".llm_usage.json"
+
+
+def _record_llm_tps(backend: str, model: str, completion, elapsed: float) -> None:
+    """Best-effort: record the latest LLM generation speed to .llm_usage.json.
+
+    LM Studio (MLX) and Ollama expose no live tokens/sec endpoint the way Surya's
+    llama-server does via /slots, so the only place the number exists is each
+    completed response's `usage`. The app_usage.sh monitor reads this file. Never
+    raises — extraction must not fail because a metrics write did.
+    """
+    try:
+        usage = getattr(completion, "usage", None)
+        out_tokens = getattr(usage, "completion_tokens", None)
+        if not out_tokens or elapsed <= 0:
+            return
+        LLM_USAGE_FILE.write_text(
+            json.dumps(
+                {
+                    "backend": backend,
+                    "model": model,
+                    "completion_tokens": out_tokens,
+                    "elapsed_s": round(elapsed, 3),
+                    "tps": round(out_tokens / elapsed, 1),
+                    "ts": time.time(),
+                }
+            ),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001 - metrics are best-effort, never fatal
+        pass
+
+
+OCR_USAGE_FILE = Path(__file__).resolve().parent / ".ocr_usage.json"
+
+
+def _reset_ocr_pages() -> None:
+    """Zero the OCR page and file counters — called once when the Surya model loads (i.e.
+    once per app process) so app_usage.sh shows work done this session, not forever."""
+    try:
+        OCR_USAGE_FILE.write_text(
+            json.dumps({"pages_total": 0, "pages_last": 0, "files_total": 0, "ts": time.time()}),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _record_ocr_pages(n_pages: int) -> None:
+    """Best-effort: add to the running count of Surya-OCR'd pages/files for app_usage.sh.
+
+    One call == one file OCR'd (run_surya_ocr handles a single PDF), so this also bumps
+    files_total by one. Read-modify-write on a file (not a module global) so the counts
+    survive Streamlit's per-interaction reruns. Never raises — OCR must not fail because
+    a metrics write did.
+    """
+    if n_pages <= 0:
+        return
+    try:
+        prev_pages, prev_files = 0, 0
+        if OCR_USAGE_FILE.exists():
+            prev = json.loads(OCR_USAGE_FILE.read_text(encoding="utf-8"))
+            prev_pages = prev.get("pages_total", 0)
+            prev_files = prev.get("files_total", 0)
+        OCR_USAGE_FILE.write_text(
+            json.dumps({
+                "pages_total": prev_pages + n_pages,
+                "pages_last": n_pages,
+                "files_total": prev_files + 1,
+                "ts": time.time(),
+            }),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_chat_json(
     *,
     backend: str,
@@ -527,7 +593,9 @@ def run_chat_json(
         else:
             request_kwargs["response_format"] = response_format
         try:
+            _t0 = time.monotonic()
             completion = client.chat.completions.create(**request_kwargs)
+            _record_llm_tps(backend, model, completion, time.monotonic() - _t0)
             choice = completion.choices[0]
             return (choice.message.content or ""), (choice.finish_reason or "stop")
         except (BadRequestError, UnprocessableEntityError) as exc:
@@ -929,7 +997,9 @@ def get_surya_recognizer():
     if LLAMA_SERVER:
         # Ensure `llama-server` is found even if the app was launched with a minimal PATH.
         os.environ["PATH"] = str(Path(LLAMA_SERVER).parent) + os.pathsep + os.environ.get("PATH", "")
-    return RecognitionPredictor(SuryaInferenceManager())
+    recognizer = RecognitionPredictor(SuryaInferenceManager())
+    _reset_ocr_pages()  # start this session's OCR page count at zero
+    return recognizer
 
 
 def _surya_page_text(prediction) -> str:
@@ -962,6 +1032,7 @@ def run_surya_ocr(pdf_bytes: bytes) -> str:
         return ""
 
     predictions = recognizer(images)  # batched -> processed across the slots in parallel
+    _record_ocr_pages(len(images))
     parts: list[str] = []
     for page_number, prediction in enumerate(predictions, start=1):
         text = _surya_page_text(prediction)
@@ -1909,7 +1980,20 @@ with st.sidebar:
 
     available_models: list[str] = st.session_state["available_models"]
     if available_models:
-        model = st.selectbox("Model", available_models, key="model_select")
+        model_filter = st.text_input(
+            "Filter models",
+            key="model_filter",
+            placeholder="e.g. e4b — substring; blank shows all",
+            help=(
+                "Show only fetched models whose id contains this text. Handy when a "
+                "local server (LM Studio / Ollama) lists models you don't use."
+            ),
+        )
+        # No key on the selectbox: filtering changes the options, and a persisted key
+        # whose value drops out of the options would raise. `or available_models`
+        # avoids an empty dropdown when the filter matches nothing.
+        options = [m for m in available_models if model_filter.lower() in m.lower()]
+        model = st.selectbox("Model", options or available_models)
     else:
         model = st.text_input("Model", key="model_text")
 
@@ -2030,10 +2114,13 @@ with st.sidebar:
             "Force Surya OCR (on-device, llama.cpp, ~3 GB) — recommended"
         )
         pdf_mode_options.extend(["auto_surya_fallback", "force_surya"])
+    # Default to on-device Surya OCR when it's available (best quality here); fall
+    # back to the plain native/OCR auto mode when Surya isn't installed.
+    default_pdf_mode = "force_surya" if "force_surya" in pdf_mode_options else "auto_ocr_fallback"
     pdf_input_mode = st.selectbox(
         "PDF text preparation",
         pdf_mode_options,
-        index=0,
+        index=pdf_mode_options.index(default_pdf_mode),
         format_func=lambda value: pdf_mode_labels[value],
         help=(
             "OCR options use Tesseract/OCRmyPDF. Apple Vision (if available) is on-device "

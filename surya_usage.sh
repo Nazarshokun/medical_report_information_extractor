@@ -54,7 +54,10 @@ try:
         if slots is not None:
             delta = 0
             for s in slots:
-                sid, task, dec = s["id"], s["id_task"], s["next_token"][0]["n_decoded"]
+                # llama-server transiently omits id_task/next_token on a slot while a
+                # task is being assigned or freed, so read every field defensively.
+                sid, task = s.get("id"), s.get("id_task", -1)
+                dec = (s.get("next_token") or [{}])[0].get("n_decoded", 0)
                 p_task, p_dec = prev.get(sid, (task, dec))
                 delta += max(0, dec - p_dec) if task == p_task else dec
                 prev[sid] = (task, dec)
@@ -62,12 +65,13 @@ try:
             history[:] = [(t, d) for (t, d) in history if now - t <= 4]
             span = (now - history[0][0]) if len(history) > 1 else 0
             tps = (sum(d for _, d in history) / span) if span > 0.2 else 0
-            running = sum(x["is_processing"] for x in slots)
+            running = sum(bool(x.get("is_processing")) for x in slots)
             print(f"pid {pid} · port {port} · RSS {rss_gb(pid)} GB")
             print(f"{len(slots)} slots · {running} running · ~{tps:,.0f} output tok/s")
             for x in slots:
-                tag = "RUN " if x["is_processing"] else "idle"
-                print(f"  slot {x['id']}: {tag} {x['n_prompt_tokens']:>5} -> {x['next_token'][0]['n_decoded']:>5} tok")
+                tag = "RUN " if x.get("is_processing") else "idle"
+                dec = (x.get("next_token") or [{}])[0].get("n_decoded", 0)
+                print(f"  slot {x.get('id')}: {tag} {x.get('n_prompt_tokens', 0):>5} -> {dec:>5} tok")
 
         iters += 1
         if once and iters >= 5:
