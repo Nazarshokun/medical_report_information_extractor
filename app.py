@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import io
 import json
 import os
@@ -387,6 +388,101 @@ def build_results_zip(
         if results_csv is not None:
             zf.writestr("results.csv", results_csv)
         zf.writestr("summary.json", json.dumps(summary, indent=2, ensure_ascii=False))
+    return buffer.getvalue()
+
+
+# --- Saved OCR text (Option B): OCR a PDF once, reuse the text forever --------------
+# OCR is the slow, GPU-heavy step, and its output never changes with the schema. We can
+# save Surya's text (as self-describing JSON) so a later run skips OCR entirely and sends
+# the saved text straight to the LLM. The JSON keeps metadata (source file, content hash,
+# engine, page/char counts) so a reloaded file proves which PDF it came from.
+OCR_CACHE_DIR = Path(__file__).resolve().parent / "ocr_cache"
+
+
+def build_ocr_json(prepared: "PreparedReport", pdf_bytes: bytes) -> dict:
+    """Self-describing OCR record: metadata + the text that goes to the model."""
+    return {
+        "schema_version": 1,
+        "source_file": prepared.source_file_name,
+        "report_name": prepared.report_name,
+        "sha256": hashlib.sha256(pdf_bytes).hexdigest(),
+        "engine": prepared.text_extraction_method,
+        "n_chars": len(prepared.report_text or ""),
+        "ts": time.time(),
+        "warnings": prepared.preparation_warnings,
+        "text": prepared.report_text or "",
+    }
+
+
+def save_ocr_json(prepared: "PreparedReport", pdf_bytes: bytes) -> Path | None:
+    """Write one reusable OCR JSON to ocr_cache/. Best-effort; never raises.
+
+    Named <stem>__<hash8>.json so the same PDF overwrites its own record (idempotent)
+    and two different PDFs with the same name don't collide.
+    """
+    if not (prepared.report_text or "").strip():
+        return None
+    try:
+        OCR_CACHE_DIR.mkdir(exist_ok=True)
+        digest = hashlib.sha256(pdf_bytes).hexdigest()[:8]
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(prepared.report_name).stem) or "report"
+        path = OCR_CACHE_DIR / f"{stem}__{digest}.json"
+        path.write_text(
+            json.dumps(build_ocr_json(prepared, pdf_bytes), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return path
+    except Exception:  # noqa: BLE001 - saving is a convenience, not a hard requirement
+        return None
+
+
+def prepared_from_ocr_json(raw_bytes: bytes, fallback_name: str) -> "PreparedReport":
+    """Turn an uploaded saved-OCR JSON back into a PreparedReport — no OCR, straight to LLM."""
+    text, name, source = "", fallback_name, fallback_name
+    warnings: list[str] = []
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or "")
+            name = str(payload.get("report_name") or fallback_name)
+            source = str(payload.get("source_file") or fallback_name)
+            if not text:
+                warnings.append("Saved OCR JSON has no 'text' field.")
+        else:
+            warnings.append("Saved OCR JSON is not an object.")
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"Could not read saved OCR JSON: {exc}")
+    return PreparedReport(
+        report_name=name,
+        source_file_name=source,
+        report_text=text,
+        source_kind="saved-ocr",
+        text_extraction_method="saved-ocr-json",
+        preparation_warnings=warnings,
+    )
+
+
+def build_texts_zip(reports: list["PreparedReport"]) -> bytes:
+    """A ZIP of one plaintext .txt per report — the 'save all txt per report' option."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for report in reports:
+            stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(report.report_name).stem) or "report"
+            zf.writestr(f"{stem}.txt", report.report_text or "")
+    return buffer.getvalue()
+
+
+def build_ocr_jsons_zip(pairs: list[tuple["PreparedReport", bytes]]) -> bytes:
+    """A ZIP of reusable OCR JSONs (one per PDF) for download, mirroring ocr_cache/."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for prepared, pdf_bytes in pairs:
+            stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(prepared.report_name).stem) or "report"
+            digest = hashlib.sha256(pdf_bytes).hexdigest()[:8]
+            zf.writestr(
+                f"{stem}__{digest}.json",
+                json.dumps(build_ocr_json(prepared, pdf_bytes), ensure_ascii=False, indent=2),
+            )
     return buffer.getvalue()
 
 
@@ -2280,6 +2376,24 @@ with report_col:
         type=["pdf"],
         accept_multiple_files=True,
     )
+    save_ocr_reusable = st.checkbox(
+        "Save OCR text as reusable JSON",
+        value=True,
+        help=(
+            "After a PDF is OCR'd, save its text to the ocr_cache/ folder as a JSON file "
+            "(and offer a ZIP download). Reuse it later via the uploader below to skip OCR "
+            "entirely — OCR is the slow step, and its text never changes with the schema."
+        ),
+    )
+    uploaded_ocr_json = st.file_uploader(
+        "Reuse saved OCR (.json) — skips OCR, sends the saved text straight to the model",
+        type=["json"],
+        accept_multiple_files=True,
+        help=(
+            "Upload JSON files previously saved by 'Save OCR text as reusable JSON'. "
+            "Surya does not run for these — only the fast LLM extraction does."
+        ),
+    )
 
     st.info(
         "Replicated from the paper's architecture: the model receives extracted plaintext "
@@ -2349,6 +2463,11 @@ if run_extraction:
                 preparation_warnings=[],
             )
         )
+    # Reused saved OCR: no Surya, straight to the LLM with the previously-saved text.
+    for uploaded_json in uploaded_ocr_json or []:
+        prepared_reports.append(
+            prepared_from_ocr_json(uploaded_json.getvalue(), uploaded_json.name)
+        )
     def transcribe_pdf_images(page_images: list[bytes]) -> str:
         # Transcribe page by page so per-call image tokens stay bounded and the
         # output keeps the "[Page N]" convention used elsewhere in the pipeline.
@@ -2366,19 +2485,24 @@ if run_extraction:
                 transcribed.append(f"[Page {page_number}]\n{page_text}")
         return "\n\n".join(transcribed).strip()
 
+    ocr_saveable: list[tuple[PreparedReport, bytes]] = []
     for uploaded_pdf in uploaded_pdf_reports or []:
+        pdf_bytes = uploaded_pdf.getvalue()
         try:
-            prepared_reports.append(
-                prepare_pdf_report(
-                    report_name=uploaded_pdf.name,
-                    pdf_bytes=uploaded_pdf.getvalue(),
-                    pdf_input_mode=pdf_input_mode,
-                    native_text_min_chars=int(native_text_min_chars),
-                    ocr_languages=ocr_languages,
-                    ocrmypdf_path=ocrmypdf_path,
-                    transcribe_images=transcribe_pdf_images,
-                )
+            prepared_pdf = prepare_pdf_report(
+                report_name=uploaded_pdf.name,
+                pdf_bytes=pdf_bytes,
+                pdf_input_mode=pdf_input_mode,
+                native_text_min_chars=int(native_text_min_chars),
+                ocr_languages=ocr_languages,
+                ocrmypdf_path=ocrmypdf_path,
+                transcribe_images=transcribe_pdf_images,
             )
+            prepared_reports.append(prepared_pdf)
+            # Save the OCR text so a future run can skip Surya (Option B).
+            if save_ocr_reusable and prepared_pdf.report_text.strip():
+                ocr_saveable.append((prepared_pdf, pdf_bytes))
+                save_ocr_json(prepared_pdf, pdf_bytes)
         except Exception as exc:
             prepared_reports.append(
                 PreparedReport(
@@ -2390,6 +2514,16 @@ if run_extraction:
                     preparation_warnings=[str(exc)],
                 )
             )
+    # Persist the saved-OCR artifacts so their download buttons survive the reruns that
+    # download clicks trigger (mirrors how results are stored in session_state below).
+    if save_ocr_reusable and ocr_saveable:
+        st.session_state["last_ocr_saved"] = {
+            "count": len(ocr_saveable),
+            "json_zip": build_ocr_jsons_zip(ocr_saveable),
+            "text_zip": build_texts_zip([p for p, _ in ocr_saveable]),
+        }
+    else:
+        st.session_state.pop("last_ocr_saved", None)
 
     if not prepared_reports:
         st.error("Provide at least one plaintext report or PDF.")
@@ -2510,6 +2644,26 @@ if run_extraction:
     # outside the run guard, from session_state.
     st.session_state["last_run"] = {"results": results, "schema": schema_obj}
 
+
+if st.session_state.get("last_ocr_saved"):
+    _saved = st.session_state["last_ocr_saved"]
+    st.caption(
+        f"Saved {_saved['count']} OCR record(s) to `ocr_cache/`. Re-upload any of them in "
+        "'Reuse saved OCR (.json)' to skip OCR next time."
+    )
+    _cols = st.columns(2)
+    _cols[0].download_button(
+        f"Download saved OCR JSON ({_saved['count']} file(s), reusable)",
+        data=_saved["json_zip"],
+        file_name="ocr_saved_json.zip",
+        mime="application/zip",
+    )
+    _cols[1].download_button(
+        "Download OCR text as .txt per report",
+        data=_saved["text_zip"],
+        file_name="ocr_saved_text.zip",
+        mime="application/zip",
+    )
 
 if st.session_state.get("last_run"):
     _last_run = st.session_state["last_run"]

@@ -28,6 +28,9 @@ secrets.*
 .llm_usage.json
 .ocr_usage.json
 
+# Saved OCR text (holds report text — treat as PHI, never commit)
+ocr_cache/
+
 # Data / uploads (avoid committing any medical reports or PHI)
 *.pdf
 *.csv
