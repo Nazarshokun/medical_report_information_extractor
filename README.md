@@ -58,6 +58,11 @@ This app assumes you already have de-identified reports, whether as plaintext fi
 
 ## Run
 
+> **Deploying on a laptop (macOS or Windows)?** See **[DEPLOYMENT.md](DEPLOYMENT.md)** for
+> the complete setup (Python 3.12 `.venv-surya`, on-device Surya OCR, LM Studio / Ollama).
+> Once set up, launch with **`./run.sh`** (macOS) or **`.\run.ps1`** (Windows) — these use
+> the project venv, which a bare `streamlit run` can miss.
+
 ```bash
 cd medical_report_information_extractor
 streamlit run app.py
