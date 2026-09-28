@@ -54,8 +54,23 @@ CONFIG_DIR = Path(__file__).resolve().parent / "config"
 # served by llama.cpp/Metal (~3 GB), loaded once and kept warm across reruns/files
 # via @st.cache_resource. Needs the `llama-server` binary (brew install llama.cpp);
 # surya imports torch for its small text-detection model. It runs 8 parallel
-# llama.cpp slots by default (~14 GB KV cache); OCR is batched below so all 8 are
-# actually used. Export SURYA_INFERENCE_PARALLEL=<n> to trade slots for memory.
+# llama.cpp slots by default; surya_ocr_many keeps a page in each of them. Export
+# SURYA_INFERENCE_PARALLEL=<n> to trade slots for memory.
+#
+# Give every Surya request room for a whole page. llama-server gives each parallel
+# slot a fixed context (Surya's default: 12,288 tokens) for the page image AND the
+# generated text; when it fills, generation stops mid-page and Surya keeps the
+# cut-off text without any warning. Page images here measured ~3,800–6,500 tokens
+# and dense pages generate 6,000+, so the default silently cut long pages short.
+# 20,480 fits an ~8k-token image plus Surya's full 12,288-token output budget.
+# Memory: store that context at 8-bit (-ctk/-ctv q8_0) and turn off llama-server's
+# RAM prompt cache (--cache-ram 0; it defaults to 8 GB, and OCR prompts — each a
+# different page image — are never reused). Measured on 6 dense pages: identical
+# OCR text to full precision, and the server used 3.4 GB instead of 10.4 GB.
+# Surya reads these when it is imported, so they're set before the import; an
+# exported value wins.
+os.environ.setdefault("SURYA_INFERENCE_CTX_PER_SLOT", "20480")
+os.environ.setdefault("LLAMA_CPP_EXTRA_ARGS", "--cache-ram 0 -ctk q8_0 -ctv q8_0")
 try:
     from surya.inference import SuryaInferenceManager
     from surya.recognition import RecognitionPredictor
@@ -1234,7 +1249,9 @@ def get_surya_recognizer():
     if LLAMA_SERVER:
         # Ensure `llama-server` is found even if the app was launched with a minimal PATH.
         os.environ["PATH"] = str(Path(LLAMA_SERVER).parent) + os.pathsep + os.environ.get("PATH", "")
-    recognizer = RecognitionPredictor(SuryaInferenceManager())
+    # Start the server now (lazy=False): surya_ocr_many calls the recognizer from
+    # several threads, and two first calls racing would each spawn a server.
+    recognizer = RecognitionPredictor(SuryaInferenceManager(lazy=False))
     _reset_ocr_pages()  # start this session's OCR page count at zero
     return recognizer
 
@@ -1255,33 +1272,133 @@ def _surya_page_text(prediction) -> str:
 SURYA_MAX_PAGES = 50
 
 
-def run_surya_ocr(pdf_bytes: bytes) -> tuple[str, int]:
-    """OCR a PDF in-process with the on-device Surya model, returning "[Page N]" text.
+def _surya_workers() -> int:
+    """How many pages to keep in flight: one per llama.cpp slot."""
+    try:
+        from surya.settings import settings as surya_settings
 
-    All of a file's pages are sent to the recognizer in ONE call, so llama.cpp fans
-    them across its parallel slots (SURYA_INFERENCE_PARALLEL) instead of OCR-ing one
-    page at a time — the key throughput win. Only the first SURYA_MAX_PAGES pages are
-    OCR'd; the total page count is returned too so the caller can warn about the rest.
-    Raises on failure so the caller can fall back to native text.
+        return max(int(surya_settings.SURYA_INFERENCE_PARALLEL), 1)
+    except Exception:  # noqa: BLE001
+        return 8
+
+
+def surya_ocr_many(
+    pdfs: list[bytes],
+    on_progress: Callable[[int, int], None] | None = None,
+    on_result: Callable[[int, tuple[str, int] | Exception], None] | None = None,
+) -> list[tuple[str, int] | Exception]:
+    """OCR PDFs in-process with the on-device Surya model, keeping every slot busy.
+
+    Returns, per PDF, its "[Page N]" text and total page count — or the exception
+    that PDF raised, so one bad file doesn't sink the rest. Only the first
+    SURYA_MAX_PAGES pages of each PDF are OCR'd.
+
+    Pages from all PDFs flow through a pool with one worker per llama.cpp slot,
+    one page per Surya call. Most reports are 1–2 pages, so OCR-ing one file at a
+    time left most slots idle; here a slot picks up the next page, from any file,
+    the moment it is free, and a slow page ties up only its own slot. Each file is
+    delivered through `on_result(index, result)` as soon as its last page is done.
+    `on_progress(done, total)` (file counts) is also called about once a second
+    while waiting, so a Streamlit stop is noticed within a second; pages not yet
+    started are then cancelled and the few in flight finish in the background.
     """
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
     from PIL import Image
 
     recognizer = get_surya_recognizer()
-    page_images, total_pages = render_pdf_to_images(
-        pdf_bytes, dpi=150, max_pages=SURYA_MAX_PAGES
-    )
-    images = [Image.open(io.BytesIO(png)).convert("RGB") for png in page_images]
-    if not images:
-        return "", total_pages
+    workers = _surya_workers()
+    results: list[tuple[str, int] | Exception | None] = [None] * len(pdfs)
+    page_texts: dict[int, list[str]] = {}
+    pages_left: dict[int, int] = {}
+    total_pages: dict[int, int] = {}
+    finished = 0
 
-    predictions = recognizer(images)  # batched -> processed across the slots in parallel
-    _record_ocr_pages(len(images))
-    parts: list[str] = []
-    for page_number, prediction in enumerate(predictions, start=1):
-        text = _surya_page_text(prediction)
-        if text:
-            parts.append(f"[Page {page_number}]\n{text}")
-    return "\n\n".join(parts).strip(), total_pages
+    def deliver(index: int, result: tuple[str, int] | Exception) -> None:
+        nonlocal finished
+        results[index] = result
+        finished += 1
+        if on_result:
+            on_result(index, result)
+
+    def page_jobs():
+        # Render lazily, file by file, so a large upload never holds every page image.
+        for index, pdf_bytes in enumerate(pdfs):
+            try:
+                pngs, total = render_pdf_to_images(pdf_bytes, dpi=150, max_pages=SURYA_MAX_PAGES)
+            except Exception as exc:  # noqa: BLE001 - e.g. a corrupt PDF
+                deliver(index, exc)
+                continue
+            if not pngs:
+                deliver(index, ("", total))
+                continue
+            page_texts[index] = [""] * len(pngs)
+            pages_left[index] = len(pngs)
+            total_pages[index] = total
+            for page_number, png in enumerate(pngs, start=1):
+                yield index, page_number, Image.open(io.BytesIO(png)).convert("RGB")
+
+    jobs = page_jobs()
+    running: dict = {}  # future -> (pdf index, page number)
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="surya-ocr")
+    try:
+        while True:
+            # Keep every slot busy, plus a short queue so a slot never waits on rendering.
+            while len(running) < 2 * workers:
+                job = next(jobs, None)
+                if job is None:
+                    break
+                index, page_number, image = job
+                running[pool.submit(recognizer, [image])] = (index, page_number)
+            if not running:
+                break
+            done, _ = wait(running, timeout=1.0, return_when=FIRST_COMPLETED)
+            for future in done:
+                index, page_number = running.pop(future)
+                if isinstance(results[index], Exception):
+                    continue  # another page of this file already failed
+                try:
+                    prediction = future.result()[0]
+                except Exception as exc:  # noqa: BLE001 - fails its file; callers fall back
+                    deliver(index, exc)
+                    continue
+                page_texts[index][page_number - 1] = _surya_page_text(prediction)
+                pages_left[index] -= 1
+                if pages_left[index] == 0:
+                    parts = [
+                        f"[Page {number}]\n{text}"
+                        for number, text in enumerate(page_texts[index], start=1)
+                        if text
+                    ]
+                    _record_ocr_pages(len(page_texts[index]))
+                    deliver(index, ("\n\n".join(parts).strip(), total_pages[index]))
+            if on_progress:
+                on_progress(finished, len(pdfs))
+    finally:
+        # On a stop (or error) don't wait for queued pages.
+        pool.shutdown(wait=False, cancel_futures=True)
+    return results
+
+
+def run_surya_ocr(pdf_bytes: bytes) -> tuple[str, int]:
+    """OCR one PDF with Surya ("[Page N]" text, total page count).
+
+    Raises on failure so the caller can fall back to native text.
+    """
+    result = surya_ocr_many([pdf_bytes])[0]
+    if isinstance(result, Exception):
+        raise result
+    return result
+
+
+def pdf_needs_ocr(pdf_bytes: bytes, native_text_min_chars: int) -> bool:
+    """The auto modes' rule: OCR when the PDF's own text is short or looks garbled."""
+    try:
+        native_text, native_chars = extract_text_from_pdf_bytes(pdf_bytes)
+    except Exception:  # noqa: BLE001 - an unreadable PDF is reported by prepare_pdf_report
+        return False
+    _score, reasons = assess_text_quality(native_text)
+    return native_chars < native_text_min_chars or bool(reasons)
 
 
 def prepare_pdf_report(
@@ -1293,7 +1410,13 @@ def prepare_pdf_report(
     ocr_languages: str,
     ocrmypdf_path: str | None,
     transcribe_images: Callable[[list[bytes]], str] | None = None,
+    surya_result: tuple[str, int] | Exception | None = None,
 ) -> PreparedReport:
+    """Turn one PDF into report text using the chosen `pdf_input_mode`.
+
+    `surya_result` is this PDF's entry from surya_ocr_many when the caller OCR'd a
+    batch up front; without it, the Surya modes OCR this PDF on their own.
+    """
     native_text, native_chars = extract_text_from_pdf_bytes(pdf_bytes)
     warnings: list[str] = []
     native_score, native_quality_reasons = assess_text_quality(native_text)
@@ -1416,7 +1539,11 @@ def prepare_pdf_report(
 
         surya_text = ""
         try:
-            surya_text, total_pages = run_surya_ocr(pdf_bytes)
+            if surya_result is None:
+                surya_result = run_surya_ocr(pdf_bytes)
+            if isinstance(surya_result, Exception):
+                raise surya_result
+            surya_text, total_pages = surya_result
             surya_text = surya_text.strip()
             if total_pages > SURYA_MAX_PAGES:
                 warnings.append(
@@ -2688,8 +2815,12 @@ if run_extraction:
                 transcribed.append(f"[Page {page_number}]\n{page_text}")
         return "\n\n".join(transcribed).strip()
 
+    pdf_uploads = list(uploaded_pdf_reports or [])
+    prepared_pdfs: dict[int, PreparedReport] = {}
     ocr_saveable: list[tuple[PreparedReport, bytes]] = []
-    for uploaded_pdf in uploaded_pdf_reports or []:
+
+    def prepare_upload(index: int, surya_result=None) -> None:
+        uploaded_pdf = pdf_uploads[index]
         pdf_bytes = uploaded_pdf.getvalue()
         try:
             prepared_pdf = prepare_pdf_report(
@@ -2700,23 +2831,48 @@ if run_extraction:
                 ocr_languages=ocr_languages,
                 ocrmypdf_path=ocrmypdf_path,
                 transcribe_images=transcribe_pdf_images,
+                surya_result=surya_result,
             )
-            prepared_reports.append(prepared_pdf)
-            # Save the OCR text so a future run can skip Surya (Option B).
-            if save_ocr_reusable and prepared_pdf.report_text.strip():
-                ocr_saveable.append((prepared_pdf, pdf_bytes))
-                save_ocr_json(prepared_pdf, pdf_bytes)
         except Exception as exc:
-            prepared_reports.append(
-                PreparedReport(
-                    report_name=uploaded_pdf.name,
-                    source_file_name=uploaded_pdf.name,
-                    report_text="",
-                    source_kind="pdf",
-                    text_extraction_method="pdf-preparation-failed",
-                    preparation_warnings=[str(exc)],
-                )
+            prepared_pdfs[index] = PreparedReport(
+                report_name=uploaded_pdf.name,
+                source_file_name=uploaded_pdf.name,
+                report_text="",
+                source_kind="pdf",
+                text_extraction_method="pdf-preparation-failed",
+                preparation_warnings=[str(exc)],
             )
+            return
+        prepared_pdfs[index] = prepared_pdf
+        # Save the OCR text so a future run can skip Surya (Option B) — right away,
+        # so an interrupted batch keeps the OCR it already did.
+        if save_ocr_reusable and prepared_pdf.report_text.strip():
+            ocr_saveable.append((prepared_pdf, pdf_bytes))
+            save_ocr_json(prepared_pdf, pdf_bytes)
+
+    # Surya modes: OCR every PDF that needs it up front, pooling pages across files
+    # so all of llama.cpp's parallel slots stay busy (see surya_ocr_many). Each PDF
+    # is prepared and saved as soon as its batch of pages finishes.
+    if pdf_input_mode in ("force_surya", "auto_surya_fallback") and pdf_uploads:
+        to_ocr = [
+            index
+            for index, uploaded_pdf in enumerate(pdf_uploads)
+            if pdf_input_mode == "force_surya"
+            or pdf_needs_ocr(uploaded_pdf.getvalue(), int(native_text_min_chars))
+        ]
+        if to_ocr:
+            ocr_status = st.empty()
+            ocr_status.write(f"Surya OCR: 0/{len(to_ocr)} PDFs")
+            surya_ocr_many(
+                [pdf_uploads[index].getvalue() for index in to_ocr],
+                on_progress=lambda done, total: ocr_status.write(f"Surya OCR: {done}/{total} PDFs"),
+                on_result=lambda position, result: prepare_upload(to_ocr[position], result),
+            )
+            ocr_status.empty()
+    for index in range(len(pdf_uploads)):
+        if index not in prepared_pdfs:
+            prepare_upload(index)
+    prepared_reports.extend(prepared_pdfs[index] for index in range(len(pdf_uploads)))
     # Persist the saved-OCR artifacts so their download buttons survive the reruns that
     # download clicks trigger (mirrors how results are stored in session_state below).
     if save_ocr_reusable and ocr_saveable:
