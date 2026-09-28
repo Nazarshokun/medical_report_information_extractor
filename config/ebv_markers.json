@@ -1,0 +1,74 @@
+{
+  "type": "object",
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "description": "Extract the record identifier from the source filename. It typically appears as the token 'TCELL' or 'TCLA' with a number immediately before or after it, e.g. '0001TCELL', 'TCELL123', 'TCLA-45', '45_TCLA'; or as a numeric code of the form NN-NNN, e.g. '12-123'. Return it exactly as it appears, preserving digits, letters and separators. If none is present, return an empty string.",
+      "maxLength": 100
+    },
+    "EBER": {
+      "type": "integer",
+      "enum": [
+        0,
+        1,
+        2
+      ],
+      "description": "EBER (EBER-ISH / EBER1-EBER2 in-situ hybridization). 0 is negative, 1 is positive, 2 is not done (not tested or not mentioned)."
+    },
+    "EBV_LMP": {
+      "type": "integer",
+      "enum": [
+        0,
+        1,
+        2
+      ],
+      "description": "EBV-LMP (LMP1 / LMP2A, Latent Membrane Protein). 0 is negative, 1 is positive, 2 is not done (not tested or not mentioned)."
+    },
+    "EBNA": {
+      "type": "integer",
+      "enum": [
+        0,
+        1,
+        2
+      ],
+      "description": "EBNA (EBNA1 / EBNA2, Epstein-Barr Nuclear Antigen). 0 is negative, 1 is positive, 2 is not done (not tested or not mentioned)."
+    },
+    "additional_markers": {
+      "type": "array",
+      "description": "Any OTHER EBV marker mentioned in the report that is not EBER, EBV-LMP or EBNA above — one object per marker. Examples: BZLF1/ZEBRA/Zta, BMRF1/EA-D, VCA. For each, set `marker` to the marker name exactly as written in the report and `value` to its coded result. Only include a marker if the report actually mentions it. Do not invent markers, and do not repeat EBER, EBV-LMP or EBNA here.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "type": "string",
+            "description": "The EBV marker name exactly as it appears in the report, e.g. 'ZEBRA', 'EA-D', 'VCA'.",
+            "maxLength": 100
+          },
+          "value": {
+            "type": "integer",
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "description": "Coded result: 0 is negative, 1 is positive, 2 is not done."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "marker",
+          "value"
+        ]
+      },
+      "maxItems": 20
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "record_id",
+    "EBER",
+    "EBV_LMP",
+    "EBNA",
+    "additional_markers"
+  ]
+}

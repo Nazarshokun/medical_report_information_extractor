@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "properties": {
+    "type_report": {
+      "type": "string",
+      "description": "Determine the type of the source document. Classify it as exactly one of: \"IHC\" if the report describes immunohistochemistry staining of tissue sections (antibody markers, staining intensity, positive/negative cells); \"FC\" if it describes flow cytometric analysis (cell populations gated by surface markers, CD antigen panels, percentages of gated events); \"other\" if it is a medical/pathology report of a different type (e.g. molecular, cytogenetics, histology, clinical note); or \"not report\" if the text is not a diagnostic report at all. Base the classification only on the content and structure of the document, not on isolated keywords.",
+      "enum": [
+        "IHC",
+        "FC",
+        "other",
+        "not report"
+      ]
+    },
+    "ebv_marker": {
+      "type": "string",
+      "description": "Overall EBV status as assessed by immunohistochemistry or in-situ hybridization. Report \"positive\" if any EBV marker is expressed/detected, \"negative\" if EBV markers were tested and not detected, and \"not done\" if no EBV testing was performed or the report does not mention it. EBV may be assessed via markers such as LMP1, LMP2A, EBNA1/EBNA2, BZLF1/ZEBRA (Zta), BMRF1 (EA-D), VCA, or EBER in-situ hybridization (EBER-ISH / EBER1-EBER2). Do not infer positivity from the mere mention of a marker being tested — only from a reported positive result.",
+      "enum": [
+        "negative",
+        "positive",
+        "not done"
+      ]
+    },
+    "ebv_markers_detected": {
+      "type": "string",
+      "description": "Free-text summary of EBV testing in the report. For each EBV marker mentioned, state the marker name and its result. Tissue markers include EBER-ISH (in-situ hybridization, the standard method), LMP1, EBNA2, LMP2A. Report exactly what the document says, e.g. 'EBER-ISH positive; LMP1 positive' or 'EBER-ISH negative'. If no EBV testing is mentioned, write 'not done'",
+      "maxLength": 1000
+    },
+    "record_id": {
+      "type": "string",
+      "description": "Extract the record identifier from the source filename. It typically appears in one of these forms: (1) the token 'TCELL' or 'TCLA' with a number immediately before or after it, e.g. 'TCELL123', '123TCELL', 'TCLA-45', '45_TCLA'; or (2) a numeric code of the form NN-NNN, e.g. '12-123', optionally with additional digits before or after. Return the identifier exactly as it appears, preserving its digits, letters, and separators (hyphens/underscores). If no such identifier is present, return an empty string.",
+      "maxLength": 100
+    },
+    "diagnosis": {
+      "type": "string",
+      "description": "The report's final diagnosis (the conclusion that follows the marker results), translated into English if the report is in another language. One to three sentences; do not repeat the individual marker results.",
+      "maxLength": 1500
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "type_report",
+    "ebv_marker",
+    "ebv_markers_detected",
+    "record_id",
+    "diagnosis"
+  ]
+}
