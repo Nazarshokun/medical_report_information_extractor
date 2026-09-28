@@ -181,7 +181,9 @@ with preview_col:
         target = f"{safe}.json"
         if not safe:
             st.error("Enter a preset name first.")
-        elif target in BUILTIN_SCHEMAS:
+        # Case-insensitive: macOS (APFS) and Windows disks treat Schema.json and
+        # schema.json as the same file.
+        elif target.lower() in BUILTIN_SCHEMAS:
             st.error(
                 f"`config/{target}` is a built-in preset and can't be overwritten here — "
                 "choose another name."

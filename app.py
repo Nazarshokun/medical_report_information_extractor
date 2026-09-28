@@ -159,6 +159,15 @@ def load_json(path: Path) -> dict:
     return json.loads(load_text(path))
 
 
+def file_signature(label: str, path: Path | None) -> str:
+    """`label` plus the file's modification time and size, which change on every save."""
+    try:
+        stat = path.stat()
+    except (AttributeError, OSError):
+        return label
+    return f"{label}|{stat.st_mtime_ns}|{stat.st_size}"
+
+
 def strip_code_fences(text: str) -> str:
     cleaned = (text or "").strip()
     if cleaned.startswith("```"):
@@ -175,11 +184,21 @@ _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DO
 _MAX_JSON_ATTEMPTS = 50
 
 
-def _top_level_starts(text: str, opener: str):
-    """Yield positions of `opener` not nested inside an earlier bracket or string."""
+def _strip_reasoning(text: str) -> str:
+    """Drop <think>…</think> blocks. When the chat template opened <think> in the
+    prompt, only the closing tag is generated — so drop everything before it too,
+    or a draft JSON inside the reasoning would be taken for the answer."""
+    text = _THINK_BLOCK_RE.sub("", text)
+    close = text.lower().rfind("</think>")
+    return text[close + len("</think>"):] if close != -1 else text
+
+
+def _closing_index(text: str, start: int) -> int | None:
+    """Index of the bracket that closes the one at `start`, or None if it never closes."""
     depth = 0
     in_string = escaped = False
-    for index, ch in enumerate(text):
+    for index in range(start, len(text)):
+        ch = text[index]
         if in_string:
             if escaped:
                 escaped = False
@@ -191,42 +210,51 @@ def _top_level_starts(text: str, opener: str):
         if ch == '"':
             in_string = True
         elif ch in "{[":
-            if depth == 0 and ch == opener:
-                yield index
             depth += 1
         elif ch in "}]":
-            depth = max(depth - 1, 0)
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
 
 
-def _first_json_value(text: str) -> dict | list | None:
-    """The first complete top-level JSON object (or, if there is no "{", array).
+def _locate_json(text: str) -> tuple[dict | list | None, int | None]:
+    """Find the model's JSON in surrounding text.
 
-    Reasoning/"thinking" models (and runners that ignore JSON mode) often wrap the
-    JSON in prose, add a note after it (which may itself contain braces), or emit
-    the object twice. `raw_decode` parses one value and ignores whatever follows,
-    so none of that breaks the parse. Later start positions are tried in case the
-    prose before the JSON contains a stray bracket — but never one nested inside
-    an earlier bracket, so a truncated object isn't mistaken for the complete
-    inner object it contains (step 3 of parse_json_response salvages it instead).
+    Returns (value, None) for the first complete top-level object (or, if there is
+    no "{", array), or (None, start) when the JSON starting at `start` never
+    closes, i.e. it was truncated. Reasoning/"thinking" models (and runners that
+    ignore JSON mode) often wrap the JSON in prose, add a note after it (which may
+    itself contain braces), or emit the object twice; `raw_decode` parses one
+    value and ignores whatever follows. A bracket that doesn't parse is skipped as
+    a whole (a stray "{…}" in the prose), so an object nested inside a truncated
+    one is never mistaken for the answer.
     """
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(strict=False)
     opener = "{" if "{" in text else "["
-    for attempt, start in enumerate(_top_level_starts(text, opener)):
-        if attempt >= _MAX_JSON_ATTEMPTS:
+    start = text.find(opener)
+    for _ in range(_MAX_JSON_ATTEMPTS):
+        if start == -1:
             break
         try:
-            return decoder.raw_decode(text, start)[0]
+            return decoder.raw_decode(text, start)[0], None
         except json.JSONDecodeError:
-            continue
-    return None
+            close = _closing_index(text, start)
+            if close is None:
+                return None, start
+            start = text.find(opener, close + 1)
+    return None, None
 
 
 def _scan_json(text: str) -> tuple[bool, bool, list[str], list[tuple[int, str]]]:
     """Walk (possibly truncated) JSON, tracking string/escape state and open brackets.
 
     Returns (in_string, escaped, closers, cuts): `closers` are the brackets still
-    open at the end, and `cuts` holds, for every comma outside a string, its index
-    and the closers that would complete the text if it were cut just before it.
+    open at the end; `cuts` are places the text can be cut back to — just before a
+    comma, or just after a "[" — each with the closers that then complete it. Cuts
+    inside an object that is an array element are left out, so salvage drops a
+    half-written element (e.g. an additional_markers entry without its value)
+    rather than keeping it.
     """
     stack: list[str] = []
     cuts: list[tuple[int, str]] = []
@@ -247,9 +275,10 @@ def _scan_json(text: str) -> tuple[bool, bool, list[str], list[tuple[int, str]]]
             stack.append("}")
         elif ch == "[":
             stack.append("]")
+            cuts.append((index + 1, "".join(reversed(stack))))
         elif ch in "}]" and stack:
             stack.pop()
-        elif ch == ",":
+        elif ch == "," and stack[-2:] != ["]", "}"]:
             cuts.append((index, "".join(reversed(stack))))
     return in_string, escaped, stack, cuts
 
@@ -282,21 +311,25 @@ def _repair_truncated_json(text: str) -> str:
 
 
 def _salvage_truncated_json(text: str) -> dict | list | None:
-    """Parse JSON cut off mid-generation, keeping every field completed before the cut.
+    """Parse JSON cut off mid-generation, keeping what was completed before the cut.
 
-    Closing what is open works when the cut lands inside a string value or a
-    number. When it lands inside a key or a literal (`"EBV_L`, `nu`), no closing
-    makes valid JSON, so drop that incomplete member by cutting back to the comma
-    before it.
+    Only for text that really ends inside an open string or bracket: complete but
+    malformed JSON (a comment, Python's None) is left to fail, so the caller
+    retries instead of silently keeping a cut-down object. Closing what is open
+    works when the cut lands inside a string value or a number. When it lands
+    inside a key or a literal (`"EBV_L`, `nu`), no closing makes valid JSON, so cut
+    back to the last complete member — dropping a half-written array element whole.
     """
+    in_string, _escaped, stack, cuts = _scan_json(text)
+    if not in_string and not stack:
+        return None
     try:
-        return json.loads(_repair_truncated_json(text))
+        return json.loads(_repair_truncated_json(text), strict=False)
     except json.JSONDecodeError:
         pass
-    _in_string, _escaped, _stack, cuts = _scan_json(text)
     for index, closers in reversed(cuts[-_MAX_JSON_ATTEMPTS:]):
         try:
-            return json.loads(text[:index].rstrip() + closers)
+            return json.loads(text[:index].rstrip() + closers, strict=False)
         except json.JSONDecodeError:
             continue
     return None
@@ -304,26 +337,26 @@ def _salvage_truncated_json(text: str) -> dict | list | None:
 
 def parse_json_response(text: str) -> dict | list:
     cleaned = strip_code_fences(text)
-    # 1) Plain parse.
+    # 1) Plain parse. strict=False accepts raw newlines/tabs inside strings, which
+    # models emit when not grammar-constrained; the content itself is intact.
     try:
-        return json.loads(cleaned)
+        return json.loads(cleaned, strict=False)
     except json.JSONDecodeError:
         pass
     # 2) The JSON inside a thinking/prose wrapper, ignoring anything after it.
-    body = _THINK_BLOCK_RE.sub("", cleaned)
-    embedded = _first_json_value(body)
-    if embedded is not None:
-        return embedded
+    body = _strip_reasoning(cleaned)
+    value, truncated_at = _locate_json(body)
+    if value is not None:
+        return value
     # 3) Last resort: the model likely looped inside a value and was cut off by
     # the token cap, leaving truncated JSON. Salvage what was generated before it.
-    start = body.find("{") if "{" in body else body.find("[")
-    if start != -1:
-        salvaged = _salvage_truncated_json(body[start:])
+    if truncated_at is not None:
+        salvaged = _salvage_truncated_json(body[truncated_at:])
         if salvaged is not None:
             return salvaged
     # Nothing recovered; re-raise the original decode error for the caller to
     # record this report as failed.
-    return json.loads(cleaned)
+    return json.loads(cleaned, strict=False)
 
 
 def validate_schema(schema: dict) -> None:
@@ -421,26 +454,35 @@ def build_results_csv(results: list[ExtractionResult], schema: dict) -> bytes:
                     continue
                 name = entry.get("marker")
                 if isinstance(name, str) and name.strip():
-                    row[EXTRA_MARKER_PREFIX + name.strip()] = scalar_to_csv_cell(
-                        entry.get("value")
-                    )
+                    column = EXTRA_MARKER_PREFIX + name.strip()
+                    value = entry.get("value")
+                    if value is None and row.get(column):
+                        continue  # a later entry without a result mustn't blank an earlier one
+                    row[column] = scalar_to_csv_cell(value)
         writer.writerow(row)
 
     return buffer.getvalue().encode("utf-8")
 
 
-def _unique_stem(stem: str, used: set[str]) -> str:
-    """`stem`, or `stem__2`, `stem__3`, … when an earlier file in the archive took it.
+def _unique_stems(stems: list[str]) -> list[str]:
+    """Distinct archive names for `stems`, in order.
 
-    Without this, `report.pdf` + `report.txt` both wrote `report.json` and the
-    archive silently kept only one of them on extraction.
+    The first file with a stem keeps it; later duplicates get `__2`, `__3`, …,
+    skipping names another file uses as its own stem (so a real `report__2.txt`
+    keeps its name). Without this, `report.pdf` + `report.txt` both wrote
+    `report.json` and the archive silently kept only one of them on extraction.
     """
-    candidate, number = stem, 2
-    while candidate in used:
-        candidate = f"{stem}__{number}"
-        number += 1
-    used.add(candidate)
-    return candidate
+    reserved = set(stems)
+    used: set[str] = set()
+    names: list[str] = []
+    for stem in stems:
+        name, number = stem, 2
+        while name in used or (name != stem and name in reserved):
+            name = f"{stem}__{number}"
+            number += 1
+        used.add(name)
+        names.append(name)
+    return names
 
 
 def build_results_zip(
@@ -450,10 +492,10 @@ def build_results_zip(
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         summary = []
-        used_stems: set[str] = set()
-        for result in results:
-            stem = Path(result.report_name).stem or "report"
-            safe_stem = _unique_stem(stem.replace("/", "_"), used_stems)
+        stems = _unique_stems(
+            [(Path(result.report_name).stem or "report").replace("/", "_") for result in results]
+        )
+        for result, safe_stem in zip(results, stems, strict=True):
             summary.append(
                 {
                     "report_name": result.report_name,
@@ -559,10 +601,11 @@ def build_texts_zip(reports: list["PreparedReport"]) -> bytes:
     """A ZIP of one plaintext .txt per report — the 'save all txt per report' option."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        used_stems: set[str] = set()
-        for report in reports:
-            stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(report.report_name).stem) or "report"
-            zf.writestr(f"{_unique_stem(stem, used_stems)}.txt", report.report_text or "")
+        stems = _unique_stems(
+            [re.sub(r"[^A-Za-z0-9._-]+", "_", Path(r.report_name).stem) or "report" for r in reports]
+        )
+        for report, stem in zip(reports, stems, strict=True):
+            zf.writestr(f"{stem}.txt", report.report_text or "")
     return buffer.getvalue()
 
 
@@ -698,7 +741,9 @@ def _adapt_to_rejected_param(request_kwargs: dict, exc: Exception) -> bool:
     if "max_tokens" in request_kwargs and "max_completion_tokens" in message:
         request_kwargs["max_completion_tokens"] = request_kwargs.pop("max_tokens")
         return True
-    if "temperature" in request_kwargs and "temperature" in message:
+    # The quoted parameter name, so a schema property like `body_temperature` named
+    # in an unrelated error doesn't drop the sampling temperature.
+    if "temperature" in request_kwargs and "'temperature'" in message and "support" in message:
         del request_kwargs["temperature"]
         return True
     return False
@@ -725,7 +770,8 @@ def _create_chat_completion(client, request_kwargs: dict):
         try:
             return client.chat.completions.create(**request_kwargs)
         except (BadRequestError, UnprocessableEntityError) as exc:
-            if not _adapt_to_rejected_param(request_kwargs, exc):
+            # A context overflow can name max_tokens too (vLLM); renaming won't help.
+            if _is_context_overflow(exc) or not _adapt_to_rejected_param(request_kwargs, exc):
                 raise
 
 
@@ -2114,7 +2160,6 @@ st.caption(
     "text extraction, while scanned PDFs can use OCR. De-identification is still outside this project."
 )
 
-default_instructions = load_text(CONFIG_DIR / "instructions.txt")
 default_schema = load_json(CONFIG_DIR / "schema.json")
 
 st.session_state.setdefault("provider", DEFAULT_PROVIDER)
@@ -2424,16 +2469,16 @@ with config_col:
             "page). Editing the text below or uploading a file overrides the preset."
         ),
     )
+    # Reload when the selection changes or the preset file is saved over (on the
+    # Instructions manager page) — the signature includes the file's mtime.
+    instr_path = instr_choices.get(selected_instr, CONFIG_DIR / "instructions.txt")
+    instr_signature = file_signature(selected_instr, instr_path)
     if (
-        st.session_state.get("_instr_preset_loaded") != selected_instr
+        st.session_state.get("_instr_preset_loaded") != instr_signature
         or "instructions_text" not in st.session_state
     ):
-        st.session_state["instructions_text"] = (
-            load_text(instr_choices[selected_instr])
-            if selected_instr in instr_choices
-            else default_instructions
-        )
-        st.session_state["_instr_preset_loaded"] = selected_instr
+        st.session_state["instructions_text"] = load_text(instr_path)
+        st.session_state["_instr_preset_loaded"] = instr_signature
 
     instructions_file = st.file_uploader(
         "Instructions file (.txt) — overrides the preset", type=["txt"]
@@ -2472,19 +2517,20 @@ with config_col:
         format_func=lambda name: schema_labels.get(name, name),
         help="Pick a built-in schema from the config folder. Editing the text below or uploading a file overrides it.",
     )
-    # Load the chosen preset into the editable area whenever the selection changes.
+    # Load the chosen preset into the editable area whenever the selection changes
+    # or the file is saved over (on the Schema builder page).
+    schema_path = schema_choices.get(selected_schema_name)
+    schema_signature = file_signature(selected_schema_name, schema_path)
     if (
-        st.session_state.get("_schema_preset_loaded") != selected_schema_name
+        st.session_state.get("_schema_preset_loaded") != schema_signature
         or "schema_text" not in st.session_state
     ):
         st.session_state["schema_text"] = json.dumps(
-            load_json(schema_choices[selected_schema_name])
-            if selected_schema_name in schema_choices
-            else default_schema,
+            load_json(schema_path) if schema_path else default_schema,
             indent=2,
             ensure_ascii=False,
         )
-        st.session_state["_schema_preset_loaded"] = selected_schema_name
+        st.session_state["_schema_preset_loaded"] = schema_signature
 
     schema_file = st.file_uploader(
         "JSON Schema file (.json) — overrides the preset", type=["json"]
