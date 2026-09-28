@@ -2630,6 +2630,7 @@ with config_col:
         "schema.json": "Full — all dedicated marker fields (schema.json)",
         "schema_fast.json": "Fast / free-form — metadata + all-markers catch-all (schema_fast.json)",
         "schema_ukr.json": "Ukrainian — full (schema_ukr.json)",
+        "schema_discharge.json": "Discharge summary — registry registration fields (schema_discharge.json)",
     }
     schema_names = list(schema_choices.keys()) or ["schema.json"]
     # Keyed so the choice survives page switches; a preset deleted on the Schema

@@ -1,0 +1,31 @@
+{
+  "title": "Medical Report Information Extractor: on-premises LLM extraction of structured data from pathology reports and discharge summaries",
+  "upload_type": "software",
+  "description": "A Streamlit application for extracting structured data from free-text medical documents (pathology reports and discharge summaries) with large language models. Extraction tasks are defined by configurable JSON Schemas and instructions. For patient data, it runs entirely on-premises with local open-weight models (Ollama, LM Studio or other OpenAI-compatible servers) and on-device OCR for scanned PDFs, so no document text leaves the hospital. It supports lymphoma registries by pre-filling REDCap registration forms for data-manager verification.",
+  "creators": [
+    {
+      "name": "Shokun, Nazarii",
+      "affiliation": "University of Salento, Lecce, Italy"
+    }
+  ],
+  "license": "MIT",
+  "access_right": "open",
+  "keywords": [
+    "large language models",
+    "information extraction",
+    "pathology reports",
+    "discharge summaries",
+    "lymphoma",
+    "clinical registries",
+    "REDCap",
+    "OCR",
+    "privacy-preserving"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/Nazarshokun/medical_report_information_extractor",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

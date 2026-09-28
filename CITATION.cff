@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Medical Report Information Extractor: on-premises LLM extraction of structured data from pathology reports and discharge summaries"
+type: software
+authors:
+  - family-names: Shokun
+    given-names: Nazarii
+    affiliation: "University of Salento, Lecce, Italy"
+version: 1.0.0
+date-released: 2026-09-28
+license: MIT
+repository-code: "https://github.com/Nazarshokun/medical_report_information_extractor"
+abstract: >-
+  A Streamlit application for extracting structured data from free-text
+  medical documents (pathology reports and discharge summaries) with large
+  language models. Extraction tasks are defined by configurable JSON Schemas
+  and instructions. For patient data, it runs entirely on-premises with local
+  open-weight models (Ollama, LM Studio or other OpenAI-compatible servers) and
+  on-device OCR for scanned PDFs, so no document text leaves the hospital.
+  It supports lymphoma registries by pre-filling REDCap registration forms for
+  data-manager verification.
+keywords:
+  - large language models
+  - information extraction
+  - pathology reports
+  - discharge summaries
+  - lymphoma
+  - clinical registries
+  - REDCap
+  - OCR
+  - privacy-preserving

@@ -24,7 +24,7 @@ keep_widget_state()  # keep the extractor's settings (and these fields) across p
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 # Presets shipped with the app: the Save button never overwrites these.
-BUILTIN_SCHEMAS = {"schema.json", "schema_fast.json", "schema_ukr.json"}
+BUILTIN_SCHEMAS = {"schema.json", "schema_fast.json", "schema_ukr.json", "schema_discharge.json"}
 LEAF_TYPES = [
     "string", "number", "integer", "boolean",
     "string[]", "number[]", "integer[]", "boolean[]",

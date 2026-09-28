@@ -33,6 +33,15 @@ Local and custom OpenAI-compatible servers use the same code path as OpenAI;
 only the base URL changes. Switching providers pre-fills a sensible base URL and
 default model, both of which remain editable.
 
+## Patient data: local processing only
+
+For registry work and any real patient documents, use only the local providers
+(**Ollama**, **LM Studio**, or a self-hosted OpenAI-compatible server such as vLLM
+or llama.cpp) together with on-device OCR. In this setup, report text, OCR and
+model inference all stay on the hospital computer; nothing is sent to a
+third-party or cloud service. The OpenAI and Anthropic options are intended only
+for synthetic or already public test documents.
+
 ## PDF handling
 
 - Word-generated or other born-digital PDFs can be processed with native PDF text extraction.
@@ -50,11 +59,28 @@ default model, both of which remain editable.
 
 This app assumes you already have de-identified reports, whether as plaintext files or PDFs.
 
+## Roadmap
+
+- **Local de-identification** of reports before extraction, running on-premises
+  like the rest of the pipeline, with a target recall of ≥99% for personal
+  identifiers.
+- **Discharge summaries to pre-fill registry registration forms** for data-manager
+  verification. A first schema and instructions preset are included
+  (`config/schema_discharge.json`, `config/instructions/discharge_summary.txt`);
+  the fields follow the lymphoma registry REDCap variable names.
+- **Better accuracy on scanned documents**, where extraction from poor scans is
+  currently the main source of error.
+- **Multicenter validation** against manual double abstraction in lymphoma
+  registries in Ukraine, Moldova, Kazakhstan and Romania.
+
 ## Project files
 
 - `app.py`: Streamlit UI
 - `config/instructions.txt`: sample zero-shot extraction instructions
 - `config/schema.json`: sample extraction schema
+- `config/schema_discharge.json` and `config/instructions/discharge_summary.txt`:
+  discharge-summary preset mapped to lymphoma registry REDCap fields
+- `CITATION.cff` and `.zenodo.json`: citation metadata
 
 ## Run
 
@@ -90,3 +116,13 @@ If `streamlit` is not on your shell `PATH`, use the Python interpreter from your
 - CSV export includes `source_file_name`, `extraction_status`, and the schema keys as column headers, one row per successfully extracted report. `extraction_status` is `valid`, `schema-warning`, `truncated`, or `needs-review` — or `not_report` / `flow_citometry` for documents the pre-screen skipped, whose fields are left blank.
 - "Download for Excel" gives the same CSV with a UTF-8 byte-order mark so Excel shows accented and Cyrillic text correctly; the plain `results.csv` stays BOM-free for R / pandas.
 - The ZIP output includes the prepared plaintext source used for each report as `*.source.txt`.
+
+## Citation
+
+If you use this software, please cite it using the metadata in
+[`CITATION.cff`](CITATION.cff) (GitHub shows it under "Cite this repository").
+Released versions are archived on Zenodo with a DOI.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

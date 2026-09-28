@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "record_id_from_source_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Extract the registry record id from the source filename (for example 0123LYMREG). Use null if absent."
+    },
+    "not_report": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "not_report",
+        null
+      ],
+      "description": "Set to 'not_report' if the document is not a discharge summary, epicrisis or consultation document. Otherwise use null."
+    },
+    "document_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "discharge_summary",
+        "consultation",
+        "other",
+        null
+      ],
+      "description": "Type of clinical document."
+    },
+    "document_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Date the document was issued (discharge date for a discharge summary). Use YYYY-MM-DD when possible."
+    },
+    "gender": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `gender`: 0 = female, 1 = male. Use null if not stated."
+    },
+    "year_birth": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "REDCap field `year_birth`: year of birth only (four digits). Never output the full date of birth."
+    },
+    "reg_biopsydate": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "REDCap field `reg_biopsydate`: date of the diagnostic biopsy, YYYY-MM-DD when possible."
+    },
+    "diagnosis_text": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Final lymphoma diagnosis as written in the document, translated into English (for example 'Diffuse large B-cell lymphoma, NOS')."
+    },
+    "reg_histologic_diagnosis": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        1,
+        2,
+        3,
+        null
+      ],
+      "description": "REDCap field `reg_histologic_diagnosis`: 1 = mature B-cell neoplasm, 2 = mature T- or NK-cell neoplasm, 3 = Hodgkin lymphoma."
+    },
+    "reg_ecog_ps": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        null
+      ],
+      "description": "REDCap field `reg_ecog_ps`: ECOG performance status at diagnosis."
+    },
+    "reg_beta_symptoms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `reg_beta_symptoms`: B symptoms present. REDCap yes/no coding: 1 = yes, 0 = no. Use null if not stated."
+    },
+    "reg_fever": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `reg_fever`: fever as a B symptom. REDCap yes/no coding: 1 = yes, 0 = no. Use null if not stated."
+    },
+    "reg_night_sweats": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `reg_night_sweats`. REDCap yes/no coding: 1 = yes, 0 = no. Use null if not stated."
+    },
+    "reg_weight_loss": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `reg_weight_loss`: weight loss as a B symptom. REDCap yes/no coding: 1 = yes, 0 = no. Use null if not stated."
+    },
+    "ann_arbor_stage": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        1,
+        2,
+        3,
+        4,
+        null
+      ],
+      "description": "REDCap field `ann_arbor_stage`: Ann Arbor stage I-IV coded 1-4 (ignore A/B, E and X suffixes)."
+    },
+    "bulky_disease": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `bulky_disease`: bulky disease reported. REDCap yes/no coding: 1 = yes, 0 = no. Use null if not stated."
+    },
+    "extranodal_involv": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `extranodal_involv`: extranodal involvement other than bone marrow, liver or spleen. REDCap yes/no coding: 1 = yes, 0 = no. Use null if not stated."
+    },
+    "extranodal_sites_text": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Extranodal sites involved, as written, in English."
+    },
+    "ldh": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "REDCap field `ldh`: LDH at diagnosis (numeric value only)."
+    },
+    "ldh_upper_normal_limit": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "REDCap field `ldh_upper_normal_limit`: laboratory upper limit of normal for LDH, if stated."
+    },
+    "beta2_microglobulin": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "REDCap field `beta2_microglobulin`: beta-2 microglobulin at diagnosis (numeric value only)."
+    },
+    "hbs_antigen_2": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        1,
+        2,
+        3,
+        null
+      ],
+      "description": "REDCap field `hbs_antigen_2`: HBsAg 1 = negative, 2 = positive, 3 = not assessed."
+    },
+    "start_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "REDCap field `start_date`: start date of first-line therapy, YYYY-MM-DD when possible."
+    },
+    "end_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "REDCap field `end_date`: end date of first-line therapy, YYYY-MM-DD when possible."
+    },
+    "first_line_regimen_text": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "First-line regimen exactly as named (for example 'R-CHOP', 'ABVD', 'BV-AVD'); mapped to REDCap `first_line_regimen` after verification."
+    },
+    "number_of_cycle_first_line": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "REDCap field `number_of_cycle_first_line`: number of first-line cycles actually given."
+    },
+    "radiotherapy": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `radiotherapy`: radiotherapy given as part of first-line treatment. REDCap yes/no coding: 1 = yes, 0 = no. Use null if not stated."
+    },
+    "first_line_response": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        null
+      ],
+      "description": "REDCap field `first_line_response` after first-line therapy: 1 = CR, 2 = PR, 3 = SD, 4 = PD, 5 = not assessed."
+    },
+    "relapse_progression": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        null
+      ],
+      "description": "REDCap field `relapse_progression`: relapse or progression documented. REDCap yes/no coding: 1 = yes, 0 = no. Use null if not stated."
+    },
+    "date_rel": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "REDCap field `date_rel`: date of relapse or progression, YYYY-MM-DD when possible."
+    },
+    "survival_status": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "enum": [
+        0,
+        1,
+        2,
+        null
+      ],
+      "description": "REDCap field `survival_status` at the document date: 0 = alive, 1 = dead, 2 = lost to follow-up."
+    },
+    "text_from_discharge_doc": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 12000,
+      "description": "REDCap field `text_from_discharge_doc`: the clinically relevant text (diagnosis, staging, treatment, response) translated into English, with all names, addresses, phone numbers and ID numbers removed."
+    },
+    "extraction_confidence": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        null
+      ],
+      "description": "Overall confidence that the extracted registry fields are correct and complete: 'high' = text clear and values explicit; 'medium' = some ambiguity; 'low' = text garbled/OCR-poor or key values inferred."
+    },
+    "extraction_confidence_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "One short sentence on what made the fields easy or hard to determine."
+    }
+  },
+  "required": [
+    "record_id_from_source_name",
+    "not_report",
+    "document_type",
+    "document_date",
+    "gender",
+    "year_birth",
+    "reg_biopsydate",
+    "diagnosis_text",
+    "reg_histologic_diagnosis",
+    "reg_ecog_ps",
+    "reg_beta_symptoms",
+    "reg_fever",
+    "reg_night_sweats",
+    "reg_weight_loss",
+    "ann_arbor_stage",
+    "bulky_disease",
+    "extranodal_involv",
+    "extranodal_sites_text",
+    "ldh",
+    "ldh_upper_normal_limit",
+    "beta2_microglobulin",
+    "hbs_antigen_2",
+    "start_date",
+    "end_date",
+    "first_line_regimen_text",
+    "number_of_cycle_first_line",
+    "radiotherapy",
+    "first_line_response",
+    "relapse_progression",
+    "date_rel",
+    "survival_status",
+    "text_from_discharge_doc",
+    "extraction_confidence",
+    "extraction_confidence_reason"
+  ]
+}
