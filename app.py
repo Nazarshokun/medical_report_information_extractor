@@ -128,7 +128,8 @@ PROVIDER_PRESETS: dict[str, dict] = {
     "Local — LM Studio": {
         "backend": "openai",
         "base_url": "http://localhost:1234/v1",
-        "default_model": "google/gemma-4-e4b",
+        # Best agreement/speed trade-off in a 5-report comparison of the local models.
+        "default_model": "qwen3-30b-a3b-instruct-2507-mlx",
         "needs_key": False,
     },
     "Custom (OpenAI-compatible)": {
