@@ -8,7 +8,7 @@
       "affiliation": "University of Salento, Lecce, Italy"
     }
   ],
-  "license": "MIT",
+  "license": "mit",
   "access_right": "open",
   "keywords": [
     "large language models",
@@ -27,5 +27,6 @@
       "relation": "isSupplementTo",
       "scheme": "url"
     }
-  ]
+  ],
+  "version": "1.0.1"
 }

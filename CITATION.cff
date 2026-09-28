@@ -6,7 +6,7 @@ authors:
   - family-names: Shokun
     given-names: Nazarii
     affiliation: "University of Salento, Lecce, Italy"
-version: 1.0.0
+version: 1.0.1
 date-released: 2026-09-28
 license: MIT
 repository-code: "https://github.com/Nazarshokun/medical_report_information_extractor"
