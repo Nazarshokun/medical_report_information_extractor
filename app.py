@@ -2301,8 +2301,8 @@ if "model_text" not in st.session_state:
 # keyed widget should take its value from one place only.
 for _key, _default in {
     "json_mode": "json_schema",
-    "temperature": 0.0,
-    "max_tokens_openai": 8000,
+    "temperature": 0.1,
+    "max_tokens_openai": 20000,
     "max_tokens_anthropic": 8000,
     "max_retries": 1,
     "split_multi_report_files": True,
