@@ -17,9 +17,14 @@ from pathlib import Path
 
 import streamlit as st
 
+from page_state import keep_widget_state
+
 st.set_page_config(page_title="Schema builder", page_icon=":material/build:", layout="wide")
+keep_widget_state()  # keep the extractor's settings (and these fields) across pages
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+# Presets shipped with the app: the Save button never overwrites these.
+BUILTIN_SCHEMAS = {"schema.json", "schema_fast.json", "schema_ukr.json"}
 LEAF_TYPES = [
     "string", "number", "integer", "boolean",
     "string[]", "number[]", "integer[]", "boolean[]",
@@ -89,7 +94,9 @@ def fields_to_schema(fields: list[dict]) -> tuple[dict, list[str]]:
         if field.get("required"):
             required.append(name)
 
-    schema: dict = {"type": "object", "properties": properties}
+    # additionalProperties: false matches the shipped schemas; OpenAI's strict
+    # structured outputs reject a schema without it.
+    schema: dict = {"type": "object", "properties": properties, "additionalProperties": False}
     if required:
         schema["required"] = required
     return schema, problems
@@ -143,6 +150,23 @@ with builder_col:
 
 schema, problems = build_schema()
 
+
+def _write_preset(name: str, schema: dict) -> None:
+    (CONFIG_DIR / name).write_text(json.dumps(schema, indent=2, ensure_ascii=False), encoding="utf-8")
+    st.session_state["_sb_saved"] = name
+
+
+@st.dialog("Overwrite schema?")
+def _confirm_overwrite(name: str, schema: dict) -> None:
+    st.write(f"**config/{name}** already exists. Replace it with this schema?")
+    confirm, cancel = st.columns(2)
+    if confirm.button("Overwrite", type="primary", icon=":material/save:", width="stretch"):
+        _write_preset(name, schema)
+        st.rerun()
+    if cancel.button("Cancel", width="stretch"):
+        st.rerun()
+
+
 with preview_col:
     st.subheader("JSON Schema")
     st.json(schema)
@@ -154,17 +178,25 @@ with preview_col:
     if st.button(":material/save: Save preset", type="primary", disabled=not can_save):
         raw = (st.session_state.get("sb_preset_name") or "").strip()
         safe = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")
+        target = f"{safe}.json"
         if not safe:
             st.error("Enter a preset name first.")
+        elif target in BUILTIN_SCHEMAS:
+            st.error(
+                f"`config/{target}` is a built-in preset and can't be overwritten here — "
+                "choose another name."
+            )
+        elif (CONFIG_DIR / target).exists():
+            _confirm_overwrite(target, schema)
         else:
-            (CONFIG_DIR / f"{safe}.json").write_text(
-                json.dumps(schema, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-            st.success(
-                f"Saved **config/{safe}.json** — open the extractor page and choose it "
-                "in the Schema preset dropdown.",
-                icon=":material/check_circle:",
-            )
+            _write_preset(target, schema)
+    saved = st.session_state.pop("_sb_saved", None)
+    if saved:
+        st.success(
+            f"Saved **config/{saved}** — open the extractor page and choose it "
+            "in the Schema preset dropdown.",
+            icon=":material/check_circle:",
+        )
     if not schema["properties"]:
         st.caption("Add at least one named field to enable saving.")
 
@@ -189,14 +221,14 @@ if delete_error:
 def _confirm_delete(name: str) -> None:
     st.write(f"Permanently delete **config/{name}**? This can't be undone.")
     confirm, cancel = st.columns(2)
-    if confirm.button("Delete", type="primary", icon=":material/delete:", use_container_width=True):
+    if confirm.button("Delete", type="primary", icon=":material/delete:", width="stretch"):
         try:
             (CONFIG_DIR / name).unlink()
             st.session_state["_sb_deleted"] = name
         except OSError as exc:
             st.session_state["_sb_delete_error"] = str(exc)
         st.rerun()
-    if cancel.button("Cancel", use_container_width=True):
+    if cancel.button("Cancel", width="stretch"):
         st.rerun()
 
 

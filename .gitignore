@@ -38,3 +38,6 @@ ocr_cache/
 *.docx
 uploads/
 data/
+
+# Stray tool logs
+*.log

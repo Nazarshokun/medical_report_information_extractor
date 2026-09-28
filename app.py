@@ -4,6 +4,7 @@ import base64
 import csv
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import re
@@ -25,6 +26,7 @@ from openai import BadRequestError, OpenAI, UnprocessableEntityError
 # ExtractionOutcome lives in its own module so @st.cache_data can pickle it reliably
 # (a class defined in the re-executed main script fails under the multipage app).
 from extraction_types import ExtractionOutcome
+from page_state import keep_widget_state
 
 try:
     # Optional: only needed for the Anthropic (Claude) backend. The app still
@@ -86,7 +88,9 @@ MULTI_REPORT_CUE_PATTERNS = (
 # Provider presets. The `openai` backend covers OpenAI cloud, local servers
 # (Ollama, LM Studio, vLLM, llama.cpp), and any OpenAI-compatible endpoint.
 # The `anthropic` backend uses the native Claude API.
-DEFAULT_PROVIDER = "OpenAI (ChatGPT)"
+# Local by default: report text stays on this machine unless the user picks a
+# cloud provider (which then asks for PHI consent).
+DEFAULT_PROVIDER = "Local — LM Studio"
 PROVIDER_PRESETS: dict[str, dict] = {
     "OpenAI (ChatGPT)": {
         "backend": "openai",
@@ -167,40 +171,68 @@ def strip_code_fences(text: str) -> str:
     return cleaned
 
 
-def _extract_json_blob(text: str) -> str:
-    """Best-effort recovery of a JSON object/array from surrounding prose.
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+_MAX_JSON_ATTEMPTS = 50
 
-    Reasoning/"thinking" models (and runners that ignore JSON mode) often wrap
-    the JSON in a <think> block or explanatory text. Strip those and return the
-    substring from the first opening bracket to the last closing one.
+
+def _top_level_starts(text: str, opener: str):
+    """Yield positions of `opener` not nested inside an earlier bracket or string."""
+    depth = 0
+    in_string = escaped = False
+    for index, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            if depth == 0 and ch == opener:
+                yield index
+            depth += 1
+        elif ch in "}]":
+            depth = max(depth - 1, 0)
+
+
+def _first_json_value(text: str) -> dict | list | None:
+    """The first complete top-level JSON object (or, if there is no "{", array).
+
+    Reasoning/"thinking" models (and runners that ignore JSON mode) often wrap the
+    JSON in prose, add a note after it (which may itself contain braces), or emit
+    the object twice. `raw_decode` parses one value and ignores whatever follows,
+    so none of that breaks the parse. Later start positions are tried in case the
+    prose before the JSON contains a stray bracket — but never one nested inside
+    an earlier bracket, so a truncated object isn't mistaken for the complete
+    inner object it contains (step 3 of parse_json_response salvages it instead).
     """
-    without_think = re.sub(
-        r"<think\b[^>]*>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL
-    )
-    start = next((i for i, ch in enumerate(without_think) if ch in "{["), None)
-    if start is None:
-        return without_think
-    end = max(without_think.rfind("}"), without_think.rfind("]"))
-    if end < start:
-        return without_think
-    return without_think[start : end + 1]
+    decoder = json.JSONDecoder()
+    opener = "{" if "{" in text else "["
+    for attempt, start in enumerate(_top_level_starts(text, opener)):
+        if attempt >= _MAX_JSON_ATTEMPTS:
+            break
+        try:
+            return decoder.raw_decode(text, start)[0]
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
-def _repair_truncated_json(text: str) -> str:
-    """Best-effort completion of JSON that was truncated mid-generation.
+def _scan_json(text: str) -> tuple[bool, bool, list[str], list[tuple[int, str]]]:
+    """Walk (possibly truncated) JSON, tracking string/escape state and open brackets.
 
-    When a model loops inside a string value and then hits the output-token cap,
-    it leaves an unterminated string and unclosed objects/arrays (the classic
-    "Unterminated string" decode error). We walk the text tracking string/escape
-    state to find what is still open, drop a dangling escape, close an open
-    string, strip a trailing comma or dangling key colon, and append the missing
-    closers. This lets the fields generated before the runaway one (e.g. all the
-    markers) still be parsed instead of losing the whole extraction.
+    Returns (in_string, escaped, closers, cuts): `closers` are the brackets still
+    open at the end, and `cuts` holds, for every comma outside a string, its index
+    and the closers that would complete the text if it were cut just before it.
     """
     stack: list[str] = []
+    cuts: list[tuple[int, str]] = []
     in_string = False
     escaped = False
-    for ch in text:
+    for index, ch in enumerate(text):
         if in_string:
             if escaped:
                 escaped = False
@@ -217,7 +249,23 @@ def _repair_truncated_json(text: str) -> str:
             stack.append("]")
         elif ch in "}]" and stack:
             stack.pop()
+        elif ch == ",":
+            cuts.append((index, "".join(reversed(stack))))
+    return in_string, escaped, stack, cuts
 
+
+def _repair_truncated_json(text: str) -> str:
+    """Best-effort completion of JSON that was truncated mid-generation.
+
+    When a model loops inside a string value and then hits the output-token cap,
+    it leaves an unterminated string and unclosed objects/arrays (the classic
+    "Unterminated string" decode error). We find what is still open, drop a
+    dangling escape, close an open string, strip a trailing comma or dangling key
+    colon, and append the missing closers. This lets the fields generated before
+    the runaway one (e.g. all the markers) still be parsed instead of losing the
+    whole extraction.
+    """
+    in_string, escaped, stack, _cuts = _scan_json(text)
     repaired = text
     if in_string:
         if escaped:
@@ -233,22 +281,46 @@ def _repair_truncated_json(text: str) -> str:
     return repaired
 
 
+def _salvage_truncated_json(text: str) -> dict | list | None:
+    """Parse JSON cut off mid-generation, keeping every field completed before the cut.
+
+    Closing what is open works when the cut lands inside a string value or a
+    number. When it lands inside a key or a literal (`"EBV_L`, `nu`), no closing
+    makes valid JSON, so drop that incomplete member by cutting back to the comma
+    before it.
+    """
+    try:
+        return json.loads(_repair_truncated_json(text))
+    except json.JSONDecodeError:
+        pass
+    _in_string, _escaped, _stack, cuts = _scan_json(text)
+    for index, closers in reversed(cuts[-_MAX_JSON_ATTEMPTS:]):
+        try:
+            return json.loads(text[:index].rstrip() + closers)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def parse_json_response(text: str) -> dict | list:
     cleaned = strip_code_fences(text)
-    # 1) Plain parse, then 2) pull the JSON out of any thinking/prose wrapper.
-    for candidate in (cleaned, _extract_json_blob(cleaned)):
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
+    # 1) Plain parse.
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+    # 2) The JSON inside a thinking/prose wrapper, ignoring anything after it.
+    body = _THINK_BLOCK_RE.sub("", cleaned)
+    embedded = _first_json_value(body)
+    if embedded is not None:
+        return embedded
     # 3) Last resort: the model likely looped inside a value and was cut off by
-    # the token cap, leaving truncated JSON. Repair and retry — the full text
-    # first so trailing complete fields survive, then the extracted blob.
-    for candidate in (cleaned, _extract_json_blob(cleaned)):
-        try:
-            return json.loads(_repair_truncated_json(candidate))
-        except json.JSONDecodeError:
-            continue
+    # the token cap, leaving truncated JSON. Salvage what was generated before it.
+    start = body.find("{") if "{" in body else body.find("[")
+    if start != -1:
+        salvaged = _salvage_truncated_json(body[start:])
+        if salvaged is not None:
+            return salvaged
     # Nothing recovered; re-raise the original decode error for the caller to
     # record this report as failed.
     return json.loads(cleaned)
@@ -286,6 +358,10 @@ def scalar_to_csv_cell(value) -> str:
 
 
 EXTRA_MARKER_PREFIX = "extra__"
+# Pipeline status per row (valid / schema-warning / truncated / needs-review, or
+# not_report / flow_citometry for pre-screened documents whose fields are blank).
+# Not "status", so it can't collide with a schema field of that name.
+STATUS_COLUMN = "extraction_status"
 
 
 def collect_additional_marker_names(results: list[ExtractionResult]) -> list[str]:
@@ -320,6 +396,7 @@ def build_results_csv(results: list[ExtractionResult], schema: dict) -> bytes:
     extra_names = collect_additional_marker_names(results)
     fieldnames = [
         "source_file_name",
+        STATUS_COLUMN,
         *base_fields,
         *[EXTRA_MARKER_PREFIX + name for name in extra_names],
     ]
@@ -330,7 +407,7 @@ def build_results_csv(results: list[ExtractionResult], schema: dict) -> bytes:
     for result in results:
         if not result.success or not isinstance(result.parsed_json, dict):
             continue
-        row = {"source_file_name": result.source_file_name}
+        row = {"source_file_name": result.source_file_name, STATUS_COLUMN: result.status_label}
         row.update(
             {
                 field: scalar_to_csv_cell(result.parsed_json.get(field))
@@ -352,6 +429,20 @@ def build_results_csv(results: list[ExtractionResult], schema: dict) -> bytes:
     return buffer.getvalue().encode("utf-8")
 
 
+def _unique_stem(stem: str, used: set[str]) -> str:
+    """`stem`, or `stem__2`, `stem__3`, … when an earlier file in the archive took it.
+
+    Without this, `report.pdf` + `report.txt` both wrote `report.json` and the
+    archive silently kept only one of them on extraction.
+    """
+    candidate, number = stem, 2
+    while candidate in used:
+        candidate = f"{stem}__{number}"
+        number += 1
+    used.add(candidate)
+    return candidate
+
+
 def build_results_zip(
     results: list[ExtractionResult],
     results_csv: bytes | None = None,
@@ -359,11 +450,15 @@ def build_results_zip(
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         summary = []
+        used_stems: set[str] = set()
         for result in results:
+            stem = Path(result.report_name).stem or "report"
+            safe_stem = _unique_stem(stem.replace("/", "_"), used_stems)
             summary.append(
                 {
                     "report_name": result.report_name,
                     "source_file_name": result.source_file_name,
+                    "output_stem": safe_stem,
                     "success": result.success,
                     "status": result.status_label,
                     "source_kind": result.source_kind,
@@ -374,8 +469,6 @@ def build_results_zip(
                 }
             )
 
-            stem = Path(result.report_name).stem or "report"
-            safe_stem = stem.replace("/", "_")
             zf.writestr(f"{safe_stem}.source.txt", result.prepared_text)
             if result.parsed_json is not None:
                 zf.writestr(
@@ -466,9 +559,10 @@ def build_texts_zip(reports: list["PreparedReport"]) -> bytes:
     """A ZIP of one plaintext .txt per report — the 'save all txt per report' option."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        used_stems: set[str] = set()
         for report in reports:
             stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(report.report_name).stem) or "report"
-            zf.writestr(f"{stem}.txt", report.report_text or "")
+            zf.writestr(f"{_unique_stem(stem, used_stems)}.txt", report.report_text or "")
     return buffer.getvalue()
 
 
@@ -587,6 +681,54 @@ def _record_ocr_pages(n_pages: int) -> None:
         pass
 
 
+def _is_openai_cloud(client) -> bool:
+    """True when an OpenAI-SDK client points at the official OpenAI API."""
+    return urlparse(str(getattr(client, "base_url", "") or "")).hostname == "api.openai.com"
+
+
+def _adapt_to_rejected_param(request_kwargs: dict, exc: Exception) -> bool:
+    """Fix a request parameter the server rejected by name; True if anything changed.
+
+    GPT-5-family models on the OpenAI API reject `max_tokens` ("Use
+    'max_completion_tokens' instead"), and some reject a non-default
+    `temperature`. Both errors name the parameter, so adapt and resend rather
+    than mistaking them for an unsupported `response_format`.
+    """
+    message = str(exc).lower()
+    if "max_tokens" in request_kwargs and "max_completion_tokens" in message:
+        request_kwargs["max_completion_tokens"] = request_kwargs.pop("max_tokens")
+        return True
+    if "temperature" in request_kwargs and "temperature" in message:
+        del request_kwargs["temperature"]
+        return True
+    return False
+
+
+def _is_context_overflow(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        phrase in message
+        for phrase in ("context length", "context_length", "maximum context", "context window")
+    )
+
+
+def _create_chat_completion(client, request_kwargs: dict):
+    """`client.chat.completions.create`, adapting to parameters the model rejects.
+
+    `request_kwargs` is updated in place, so a caller retrying with another
+    `response_format` keeps the adapted parameters.
+    """
+    if "max_tokens" in request_kwargs and _is_openai_cloud(client):
+        # The OpenAI API replaced `max_tokens`; GPT-5-family models reject it.
+        request_kwargs["max_completion_tokens"] = request_kwargs.pop("max_tokens")
+    while True:
+        try:
+            return client.chat.completions.create(**request_kwargs)
+        except (BadRequestError, UnprocessableEntityError) as exc:
+            if not _adapt_to_rejected_param(request_kwargs, exc):
+                raise
+
+
 def run_chat_json(
     *,
     backend: str,
@@ -660,7 +802,10 @@ def run_chat_json(
     # Fallback ladder of response_format values, strongest first. We try each in
     # order and step down only when the server rejects the request itself
     # (400/422) — which is how OpenAI-compatible servers signal an unsupported
-    # `response_format`. Other errors (auth, connection, 5xx) propagate as-is.
+    # `response_format`. Rejected parameters that are named in the error
+    # (max_tokens, temperature) are fixed without stepping down, and a prompt too
+    # long for the context raises at once. Other errors (auth, connection, 5xx)
+    # propagate as-is.
     response_formats: list[dict | None] = []
     if json_mode == "json_schema" and schema is not None:
         # Strip the `$schema` meta-key on a shallow copy: some structured-output
@@ -690,11 +835,13 @@ def run_chat_json(
             request_kwargs["response_format"] = response_format
         try:
             _t0 = time.monotonic()
-            completion = client.chat.completions.create(**request_kwargs)
+            completion = _create_chat_completion(client, request_kwargs)
             _record_llm_tps(backend, model, completion, time.monotonic() - _t0)
             choice = completion.choices[0]
             return (choice.message.content or ""), (choice.finish_reason or "stop")
         except (BadRequestError, UnprocessableEntityError) as exc:
+            if _is_context_overflow(exc):
+                raise  # a weaker response_format won't make the prompt fit
             last_error = exc
     # Every response_format (including the unconstrained one) was rejected.
     if last_error is not None:
@@ -760,23 +907,26 @@ def run_vision_transcription(
             if getattr(block, "type", None) == "text"
         )
 
-    completion = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "system", "content": TRANSCRIBE_SYSTEM},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{encoded}"},
-                    },
-                ],
-            },
-        ],
+    completion = _create_chat_completion(
+        client,
+        {
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": TRANSCRIBE_SYSTEM},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_text},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                        },
+                    ],
+                },
+            ],
+        },
     )
     return completion.choices[0].message.content or ""
 
@@ -831,61 +981,6 @@ def triage_document(
         return "not_report"
     # Default to processing the document so a real report is never silently dropped.
     return "pathology"
-
-
-def ihc_marker_keywords(schema: dict) -> set[str]:
-    """Lower-cased marker name stems taken from the schema's coded marker fields.
-
-    Used as a cheap keyword backstop: any integer/enum field is treated as an
-    immunohistochemistry marker, and its core token (before a parenthesis or
-    slash) becomes a search keyword, e.g. "CD56 (NCAM)" -> "cd56".
-    """
-    keywords: set[str] = set()
-    for name, spec in schema.get("properties", {}).items():
-        types = spec.get("type")
-        is_marker = isinstance(types, list) and "integer" in types and "enum" in spec
-        if not is_marker:
-            continue
-        core = re.split(r"[(/]", name)[0].strip().lower()
-        if core:
-            keywords.add(core)
-    return keywords
-
-
-IHC_TERMS = ("immunohist", "imunohist", "inmunohist", "histoqu")
-_CD_MARKER_RE = re.compile(r"\bcd\d+[a-z]*\b")
-# Common non-CD immunohistochemistry markers, used as a baseline so the
-# pre-screen still works when the schema has no dedicated marker fields
-# (e.g. the free-form schema_fast.json).
-BASE_IHC_MARKERS = frozenset({
-    "alk", "bcl2", "bcl6", "beta f1", "ccr4", "ccr7", "cla", "cyclin d1",
-    "eber", "ema", "foxp3", "gata3", "granzyme b", "granzyme m", "hla-dr",
-    "icos", "ki-67", "ki67", "mib-1", "mum1", "oct2", "pax5", "perforin",
-    "sox11", "sap", "tbx21", "tcl1", "tdt", "tia1", "lmp1", "myc",
-})
-
-
-def has_ihc_signal(text: str, marker_keywords: set[str]) -> bool:
-    """True if the text shows a real immunohistochemistry signal.
-
-    Matches an immunohistochemistry term (EN/PT/ES) or at least two distinct
-    marker tokens. Marker matching is word-bounded so short marker names (EMA,
-    ICOS, CLA, SAP, ...) do not match inside ordinary Portuguese/Spanish words
-    such as "sistema", "edema" or "medicos". Any CDxx token counts as a marker
-    even if it is not in the schema (e.g. CD20), so a report is recognised by
-    its marker panel rather than a heading word.
-    """
-    low = text.lower()
-    if any(term in low for term in IHC_TERMS):
-        return True
-    markers = set(_CD_MARKER_RE.findall(low))
-    non_cd = BASE_IHC_MARKERS | {
-        keyword for keyword in marker_keywords if not keyword.startswith("cd")
-    }
-    if non_cd:
-        pattern = re.compile(r"\b(?:" + "|".join(re.escape(k) for k in non_cd) + r")\b")
-        markers.update(pattern.findall(low))
-    return len(markers) >= 2
 
 
 @st.cache_data(show_spinner=False)
@@ -1111,21 +1206,27 @@ def _surya_page_text(prediction) -> str:
     return "\n".join(lines).strip()
 
 
-def run_surya_ocr(pdf_bytes: bytes) -> str:
+SURYA_MAX_PAGES = 50
+
+
+def run_surya_ocr(pdf_bytes: bytes) -> tuple[str, int]:
     """OCR a PDF in-process with the on-device Surya model, returning "[Page N]" text.
 
     All of a file's pages are sent to the recognizer in ONE call, so llama.cpp fans
     them across its parallel slots (SURYA_INFERENCE_PARALLEL) instead of OCR-ing one
-    page at a time — the key throughput win. Raises on failure so the caller can fall
-    back to native text.
+    page at a time — the key throughput win. Only the first SURYA_MAX_PAGES pages are
+    OCR'd; the total page count is returned too so the caller can warn about the rest.
+    Raises on failure so the caller can fall back to native text.
     """
     from PIL import Image
 
     recognizer = get_surya_recognizer()
-    page_images, _total = render_pdf_to_images(pdf_bytes, dpi=150, max_pages=50)
+    page_images, total_pages = render_pdf_to_images(
+        pdf_bytes, dpi=150, max_pages=SURYA_MAX_PAGES
+    )
     images = [Image.open(io.BytesIO(png)).convert("RGB") for png in page_images]
     if not images:
-        return ""
+        return "", total_pages
 
     predictions = recognizer(images)  # batched -> processed across the slots in parallel
     _record_ocr_pages(len(images))
@@ -1134,7 +1235,7 @@ def run_surya_ocr(pdf_bytes: bytes) -> str:
         text = _surya_page_text(prediction)
         if text:
             parts.append(f"[Page {page_number}]\n{text}")
-    return "\n\n".join(parts).strip()
+    return "\n\n".join(parts).strip(), total_pages
 
 
 def prepare_pdf_report(
@@ -1269,7 +1370,12 @@ def prepare_pdf_report(
 
         surya_text = ""
         try:
-            surya_text = run_surya_ocr(pdf_bytes).strip()
+            surya_text, total_pages = run_surya_ocr(pdf_bytes)
+            surya_text = surya_text.strip()
+            if total_pages > SURYA_MAX_PAGES:
+                warnings.append(
+                    f"PDF has {total_pages} pages; only the first {SURYA_MAX_PAGES} were OCR'd."
+                )
             if surya_text:
                 warnings.append("Surya OCR (on-device, llama.cpp) was used for this report.")
         except Exception as exc:
@@ -1846,7 +1952,9 @@ def extract_reports(
 def is_local_endpoint(backend: str, base_url: str) -> bool:
     """True only when requests stay on this machine (loopback OpenAI-compatible).
 
-    Anthropic and the blank/default OpenAI base URL are always remote.
+    Anthropic and the blank/default OpenAI base URL are always remote. So is any
+    other host on the network — including `*.local` (mDNS) names, which are other
+    machines — so sending PHI there needs the consent checkbox.
     """
     if backend != "openai":
         return False
@@ -1854,7 +1962,12 @@ def is_local_endpoint(backend: str, base_url: str) -> bool:
     if not url:
         return False  # blank -> OpenAI cloud default
     host = (urlparse(url if "://" in url else "http://" + url).hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"} or host.endswith(".local")
+    if host in {"localhost", "0.0.0.0"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback  # 127.0.0.0/8, ::1
+    except ValueError:
+        return False
 
 
 @st.fragment
@@ -1893,7 +2006,7 @@ def render_results(results: list[ExtractionResult], schema: dict) -> None:
     ]
     st.dataframe(
         summary_rows,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "report": st.column_config.TextColumn("Report", pinned=True),
@@ -1912,7 +2025,7 @@ def render_results(results: list[ExtractionResult], schema: dict) -> None:
     results_csv = build_results_csv(successful_csv_results, schema)
     bundle = build_results_zip(results, results_csv=results_csv)
 
-    download_cols = st.columns(2)
+    download_cols = st.columns(3)
     if successful_csv_results:
         download_cols[0].download_button(
             "Download results (.csv)",
@@ -1921,9 +2034,19 @@ def render_results(results: list[ExtractionResult], schema: dict) -> None:
             mime="text/csv",
             key="download_results_csv",
         )
+        # Same rows with a UTF-8 byte-order mark: without it Excel decodes the file
+        # as a legacy code page and garbles accented / Cyrillic text. Kept separate
+        # so R / pandas pipelines reading results.csv see an unchanged header.
+        download_cols[1].download_button(
+            "Download for Excel (.csv)",
+            data=b"\xef\xbb\xbf" + results_csv,
+            file_name="results_excel.csv",
+            mime="text/csv",
+            key="download_results_csv_excel",
+        )
     else:
         download_cols[0].warning("No CSV rows available.")
-    download_cols[1].download_button(
+    download_cols[2].download_button(
         "Download results (.zip)",
         data=bundle,
         file_name="medical_report_information_extractor_results.zip",
@@ -1933,7 +2056,6 @@ def render_results(results: list[ExtractionResult], schema: dict) -> None:
 
     only_problems = st.checkbox(
         "Show only problems (failed / warnings / truncated / needs-review / low confidence)",
-        value=False,
         key="results_only_problems",
     )
 
@@ -1980,6 +2102,7 @@ def render_results(results: list[ExtractionResult], schema: dict) -> None:
 
 
 st.set_page_config(page_title=APP_TITLE, page_icon=":material/biotech:", layout="wide")
+keep_widget_state()  # settings survive visits to the other pages
 st.title(APP_TITLE)
 st.write(
     "A separate Streamlit project that mirrors the paper's approach: report text "
@@ -2000,6 +2123,22 @@ if "base_url" not in st.session_state:
     st.session_state["base_url"] = PROVIDER_PRESETS[st.session_state["provider"]]["base_url"]
 if "model_text" not in st.session_state:
     st.session_state["model_text"] = PROVIDER_PRESETS[st.session_state["provider"]]["default_model"]
+# Widget defaults live in session state rather than `value=` / `index=`: the widgets
+# are keyed so page_state.keep_widget_state() can carry them across pages, and a
+# keyed widget should take its value from one place only.
+for _key, _default in {
+    "json_mode": "json_schema",
+    "temperature": 0.0,
+    "max_tokens_openai": 8000,
+    "max_tokens_anthropic": 8000,
+    "max_retries": 1,
+    "split_multi_report_files": True,
+    "prescreen_skip": True,
+    "ocr_languages": "eng",
+    "native_text_min_chars": 80,
+    "save_ocr_reusable": True,
+}.items():
+    st.session_state.setdefault(_key, _default)
 
 
 def _on_provider_change() -> None:
@@ -2085,11 +2224,14 @@ with st.sidebar:
                 "local server (LM Studio / Ollama) lists models you don't use."
             ),
         )
-        # No key on the selectbox: filtering changes the options, and a persisted key
-        # whose value drops out of the options would raise. `or available_models`
-        # avoids an empty dropdown when the filter matches nothing.
+        # `or available_models` avoids an empty dropdown when the filter matches
+        # nothing. The choice is keyed so it survives page switches; when the filter
+        # (or a re-fetch) drops it from the options, fall back to the first one.
         options = [m for m in available_models if model_filter.lower() in m.lower()]
-        model = st.selectbox("Model", options or available_models)
+        options = options or available_models
+        if st.session_state.get("model_select") not in options:
+            st.session_state["model_select"] = options[0]
+        model = st.selectbox("Model", options, key="model_select")
     else:
         model = st.text_input("Model", key="model_text")
 
@@ -2098,8 +2240,8 @@ with st.sidebar:
             "Max output tokens",
             min_value=256,
             max_value=16000,
-            value=8000,
             step=256,
+            key="max_tokens_anthropic",
             help="Anthropic requires an output token cap. Raise it for very long reports.",
         )
         json_mode = "off"
@@ -2109,7 +2251,7 @@ with st.sidebar:
         json_mode = st.selectbox(
             "JSON output mode",
             ["json_schema", "json_object", "off"],
-            index=0,
+            key="json_mode",
             format_func=lambda mode: {
                 "json_schema": "Schema-constrained (forces every required field)",
                 "json_object": "JSON object (valid JSON only, schema not enforced)",
@@ -2128,8 +2270,8 @@ with st.sidebar:
             "Temperature",
             min_value=0.0,
             max_value=1.0,
-            value=0.0,
             step=0.1,
+            key="temperature",
             help=(
                 "0.0 is greedy decoding — most reproducible, but under schema-constrained "
                 "output some local models fall into a repetition loop and run to the token "
@@ -2141,8 +2283,8 @@ with st.sidebar:
             "Max output tokens",
             min_value=256,
             max_value=32000,
-            value=8000,
             step=256,
+            key="max_tokens_openai",
             help=(
                 "Hard cap on generated tokens so a runaway/repetition loop fails fast "
                 "instead of filling the context window. Truncated output is repaired "
@@ -2155,8 +2297,8 @@ with st.sidebar:
         "Max retries on failure / truncation",
         min_value=0,
         max_value=3,
-        value=1,
         step=1,
+        key="max_retries",
         help=(
             "If extraction fails, returns empty, or is cut off at the token cap, retry "
             "this many times with a nudged temperature and a doubled token budget. Helps "
@@ -2166,12 +2308,12 @@ with st.sidebar:
 
     split_multi_report_files = st.checkbox(
         "Split files with multiple reports",
-        value=True,
+        key="split_multi_report_files",
         help="If one uploaded file contains several pathology reports, try to split it into separate extractions.",
     )
     prescreen_skip = st.checkbox(
         "Pre-screen and skip non-pathology documents",
-        value=True,
+        key="prescreen_skip",
         help=(
             "Run a fast one-word classification on each document first. Documents "
             "that are not pathology/immunohistochemistry reports are marked "
@@ -2213,10 +2355,12 @@ with st.sidebar:
     # Default to on-device Surya OCR when it's available (best quality here); fall
     # back to the plain native/OCR auto mode when Surya isn't installed.
     default_pdf_mode = "force_surya" if "force_surya" in pdf_mode_options else "auto_ocr_fallback"
+    if st.session_state.get("pdf_input_mode") not in pdf_mode_options:
+        st.session_state["pdf_input_mode"] = default_pdf_mode
     pdf_input_mode = st.selectbox(
         "PDF text preparation",
         pdf_mode_options,
-        index=pdf_mode_options.index(default_pdf_mode),
+        key="pdf_input_mode",
         format_func=lambda value: pdf_mode_labels[value],
         help=(
             "OCR options use Tesseract/OCRmyPDF. Apple Vision (if available) is on-device "
@@ -2227,7 +2371,7 @@ with st.sidebar:
     )
     ocr_languages = st.text_input(
         "OCR language(s)",
-        value="eng",
+        key="ocr_languages",
         help=(
             "Tesseract codes joined with `+` (e.g. `eng+spa+por`). For Apple Vision these "
             "map to BCP-47 (eng→en-US, ukr→uk-UA, spa→es-ES, por→pt-PT)."
@@ -2237,13 +2381,13 @@ with st.sidebar:
         "Min native PDF chars before OCR / vision",
         min_value=0,
         max_value=10000,
-        value=80,
         step=20,
+        key="native_text_min_chars",
         help="In an auto mode, PDFs below this native-text threshold or with poor native layout are sent through OCR or the vision model.",
     )
     vision_model = st.text_input(
         "Vision model (for the vision PDF modes)",
-        value="",
+        key="vision_model",
         help=(
             "Model used by the vision PDF modes above. Leave blank to reuse the main "
             "model. Point it at a vision-capable model served by your endpoint (e.g. a "
@@ -2267,16 +2411,23 @@ with config_col:
         else {}
     )
     instr_names = ["(default)", *instr_choices.keys()]
+    # Keyed so the choice survives page switches; a preset deleted on the
+    # Instructions manager page falls back to the default.
+    if st.session_state.get("instructions_preset") not in instr_names:
+        st.session_state["instructions_preset"] = "(default)"
     selected_instr = st.selectbox(
         "Instructions preset",
         instr_names,
-        index=0,
+        key="instructions_preset",
         help=(
             "Presets from config/instructions/ (build them on the Instructions manager "
             "page). Editing the text below or uploading a file overrides the preset."
         ),
     )
-    if st.session_state.get("_instr_preset_loaded") != selected_instr:
+    if (
+        st.session_state.get("_instr_preset_loaded") != selected_instr
+        or "instructions_text" not in st.session_state
+    ):
         st.session_state["instructions_text"] = (
             load_text(instr_choices[selected_instr])
             if selected_instr in instr_choices
@@ -2308,18 +2459,24 @@ with config_col:
         "schema_ukr.json": "Ukrainian — full (schema_ukr.json)",
     }
     schema_names = list(schema_choices.keys()) or ["schema.json"]
-    default_schema_index = (
-        schema_names.index("schema.json") if "schema.json" in schema_names else 0
-    )
+    # Keyed so the choice survives page switches; a preset deleted on the Schema
+    # builder page falls back to the default.
+    if st.session_state.get("schema_preset") not in schema_names:
+        st.session_state["schema_preset"] = (
+            "schema.json" if "schema.json" in schema_names else schema_names[0]
+        )
     selected_schema_name = st.selectbox(
         "Schema preset",
         schema_names,
-        index=default_schema_index,
+        key="schema_preset",
         format_func=lambda name: schema_labels.get(name, name),
         help="Pick a built-in schema from the config folder. Editing the text below or uploading a file overrides it.",
     )
     # Load the chosen preset into the editable area whenever the selection changes.
-    if st.session_state.get("_schema_preset_loaded") != selected_schema_name:
+    if (
+        st.session_state.get("_schema_preset_loaded") != selected_schema_name
+        or "schema_text" not in st.session_state
+    ):
         st.session_state["schema_text"] = json.dumps(
             load_json(schema_choices[selected_schema_name])
             if selected_schema_name in schema_choices
@@ -2363,7 +2520,7 @@ with report_col:
 
     pasted_report = st.text_area(
         "Paste one plaintext pathology report",
-        value="",
+        key="pasted_report",
         height=220,
     )
     uploaded_reports = st.file_uploader(
@@ -2378,7 +2535,7 @@ with report_col:
     )
     save_ocr_reusable = st.checkbox(
         "Save OCR text as reusable JSON",
-        value=True,
+        key="save_ocr_reusable",
         help=(
             "After a PDF is OCR'd, save its text to the ocr_cache/ folder as a JSON file "
             "(and offer a ZIP download). Reuse it later via the uploader below to skip OCR "

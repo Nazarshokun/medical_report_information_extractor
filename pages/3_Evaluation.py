@@ -24,7 +24,10 @@ from pathlib import Path
 
 import streamlit as st
 
+from page_state import keep_widget_state
+
 st.set_page_config(page_title="Evaluation", page_icon=":material/fact_check:", layout="wide")
+keep_widget_state()  # keep the extractor's settings when this page is visited
 
 _NUM_RE = re.compile(r"^\s*-?\d+(?:\.\d+)?\s*%?\s*$")
 
@@ -176,7 +179,7 @@ field_rows = sorted(
     key=lambda row: row["accuracy"],  # worst first, so problem fields surface at the top
 )
 st.dataframe(
-    field_rows, hide_index=True, use_container_width=True,
+    field_rows, hide_index=True, width="stretch",
     column_config={
         "field": st.column_config.TextColumn("Field", pinned=True),
         "accuracy": st.column_config.ProgressColumn("Accuracy", min_value=0, max_value=100, format="%.0f%%"),
@@ -188,7 +191,7 @@ st.dataframe(
 st.subheader(f"Mismatches ({len(mismatches)})")
 if mismatches:
     st.dataframe(
-        mismatches, hide_index=True, use_container_width=True,
+        mismatches, hide_index=True, width="stretch",
         column_config={
             "report": st.column_config.TextColumn("Report"),
             "field": st.column_config.TextColumn("Field"),
@@ -209,7 +212,7 @@ else:
 
 with st.expander("Per-report detail"):
     st.dataframe(
-        per_report, hide_index=True, use_container_width=True,
+        per_report, hide_index=True, width="stretch",
         column_config={
             "report": st.column_config.TextColumn("Report"),
             "fields": st.column_config.NumberColumn("Fields"),

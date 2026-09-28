@@ -87,5 +87,6 @@ If `streamlit` is not on your shell `PATH`, use the Python interpreter from your
 - The app validates the model output against the supplied JSON Schema and reports mismatches.
 - Some OpenAI-compatible servers do not support JSON mode. Disable `Use JSON mode` if needed.
 - PDF OCR support requires the local `ocrmypdf` and `tesseract` commands.
-- CSV export includes `source_file_name` plus the schema keys as column headers, one row per successfully extracted report.
+- CSV export includes `source_file_name`, `extraction_status`, and the schema keys as column headers, one row per successfully extracted report. `extraction_status` is `valid`, `schema-warning`, `truncated`, or `needs-review` — or `not_report` / `flow_citometry` for documents the pre-screen skipped, whose fields are left blank.
+- "Download for Excel" gives the same CSV with a UTF-8 byte-order mark so Excel shows accented and Cyrillic text correctly; the plain `results.csv` stays BOM-free for R / pandas.
 - The ZIP output includes the prepared plaintext source used for each report as `*.source.txt`.

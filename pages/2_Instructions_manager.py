@@ -13,7 +13,10 @@ from pathlib import Path
 
 import streamlit as st
 
+from page_state import keep_widget_state
+
 st.set_page_config(page_title="Instructions manager", page_icon=":material/edit_note:", layout="wide")
+keep_widget_state()  # keep the extractor's settings (and this editor) across pages
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 INSTR_DIR = CONFIG_DIR / "instructions"
@@ -43,15 +46,31 @@ with side_col:
     saved = presets()
     if saved:
         pick = st.selectbox("Open a saved preset", list(saved), key="im_open_pick")
-        if st.button(":material/folder_open: Load into editor", use_container_width=True):
+        if st.button(":material/folder_open: Load into editor", width="stretch"):
             st.session_state["im_text"] = saved[pick].read_text(encoding="utf-8")
             st.rerun()
     else:
         st.caption("No saved presets yet.")
     if DEFAULT_FILE.exists():
-        if st.button(":material/description: Load current default", use_container_width=True):
+        if st.button(":material/description: Load current default", width="stretch"):
             st.session_state["im_text"] = DEFAULT_FILE.read_text(encoding="utf-8")
             st.rerun()
+
+def _write_preset(name: str, text: str) -> None:
+    (INSTR_DIR / f"{name}.txt").write_text(text, encoding="utf-8")
+    st.session_state["_im_saved"] = name
+
+
+@st.dialog("Overwrite instructions preset?")
+def _confirm_overwrite(name: str, text: str) -> None:
+    st.write(f"**config/instructions/{name}.txt** already exists. Replace it with the text in the editor?")
+    confirm, cancel = st.columns(2)
+    if confirm.button("Overwrite", type="primary", icon=":material/save:", width="stretch"):
+        _write_preset(name, text)
+        st.rerun()
+    if cancel.button("Cancel", width="stretch"):
+        st.rerun()
+
 
 with edit_col:
     st.subheader("Instructions")
@@ -72,13 +91,17 @@ with edit_col:
         safe = re.sub(r"[^A-Za-z0-9_-]+", "_", (st.session_state.get("im_name") or "").strip()).strip("_")
         if not safe:
             st.error("Enter a preset name first.")
+        elif (INSTR_DIR / f"{safe}.txt").exists():
+            _confirm_overwrite(safe, st.session_state["im_text"])
         else:
-            (INSTR_DIR / f"{safe}.txt").write_text(st.session_state["im_text"], encoding="utf-8")
-            st.success(
-                f"Saved **config/instructions/{safe}.txt** — pick it in the extractor's "
-                "Instructions preset dropdown.",
-                icon=":material/check_circle:",
-            )
+            _write_preset(safe, st.session_state["im_text"])
+    saved_name = st.session_state.pop("_im_saved", None)
+    if saved_name:
+        st.success(
+            f"Saved **config/instructions/{saved_name}.txt** — pick it in the extractor's "
+            "Instructions preset dropdown.",
+            icon=":material/check_circle:",
+        )
 
 # --- Manage / delete saved presets -------------------------------------------
 st.subheader("Manage saved presets")
@@ -95,14 +118,14 @@ if delete_error:
 def _confirm_delete(name: str) -> None:
     st.write(f"Permanently delete **config/instructions/{name}.txt**? This can't be undone.")
     confirm, cancel = st.columns(2)
-    if confirm.button("Delete", type="primary", icon=":material/delete:", use_container_width=True):
+    if confirm.button("Delete", type="primary", icon=":material/delete:", width="stretch"):
         try:
             (INSTR_DIR / f"{name}.txt").unlink()
             st.session_state["_im_deleted"] = f"{name}.txt"
         except OSError as exc:
             st.session_state["_im_delete_error"] = str(exc)
         st.rerun()
-    if cancel.button("Cancel", use_container_width=True):
+    if cancel.button("Cancel", width="stretch"):
         st.rerun()
 
 
