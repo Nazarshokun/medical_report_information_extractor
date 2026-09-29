@@ -9,6 +9,7 @@ authors:
 version: 1.0.1
 date-released: 2026-09-28
 license: MIT
+doi: 10.5281/zenodo.23024522
 repository-code: "https://github.com/Nazarshokun/medical_report_information_extractor"
 abstract: >-
   A Streamlit application for extracting structured data from free-text

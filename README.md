@@ -1,5 +1,7 @@
 # medical_report_information_extractor
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23024522.svg)](https://doi.org/10.5281/zenodo.23024522)
+
 Separate Streamlit project that replicates the core application approach described in:
 
 `Leveraging large language models for structured information extraction from pathology reports`
@@ -121,7 +123,8 @@ If `streamlit` is not on your shell `PATH`, use the Python interpreter from your
 
 If you use this software, please cite it using the metadata in
 [`CITATION.cff`](CITATION.cff) (GitHub shows it under "Cite this repository").
-Released versions are archived on Zenodo with a DOI.
+Released versions are archived on Zenodo: [doi.org/10.5281/zenodo.23024522](https://doi.org/10.5281/zenodo.23024522)
+(this DOI always resolves to the latest version).
 
 ## License
 
